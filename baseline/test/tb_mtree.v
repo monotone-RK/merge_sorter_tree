@@ -38,8 +38,8 @@ module tb_MERGE_SORTER_TREE();
   endgenerate
 
   MERGE_SORTER_TREE #(`W_LOG, `DATW, `KEYW)
-  merge_tree(CLK, RST, 1'b0, merge_sorter_tree_din, merge_sorter_tree_dinen, 
-             merge_sorter_tree_ful, merge_sorter_tree_dot, merge_sorter_tree_doten);
+  merge_sorter_tree(CLK, RST, 1'b0, merge_sorter_tree_din, merge_sorter_tree_dinen, 
+                    merge_sorter_tree_ful, merge_sorter_tree_dot, merge_sorter_tree_doten);
 
   // show result
   always @(posedge CLK) begin
