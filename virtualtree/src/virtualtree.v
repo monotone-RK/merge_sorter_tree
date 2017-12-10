@@ -10,9 +10,7 @@ module SORTER_CELL #(parameter              DATW = 64,
                      parameter              KEYW = 32)
                     (input  wire [DATW-1:0] DIN0,
                      input  wire [DATW-1:0] DIN1,
-                     input  wire            VLD0,
-                     input  wire            VLD1,
-                     input  wire            FULL,
+                     input  wire            DINs_VALID,
                      output wire            DEQ0,
                      output wire            DEQ1,
                      output wire [DATW-1:0] DOUT,
@@ -31,13 +29,82 @@ module SORTER_CELL #(parameter              DATW = 64,
   endfunction
 
   wire comp_rslt = (DIN0[KEYW-1:0] < DIN1[KEYW-1:0]);
-  wire enq       = &{(~FULL), VLD0, VLD1};
+  wire enq       = DINs_VALID;
 
   assign DEQ0     = &{enq,  comp_rslt};
   assign DEQ1     = &{enq, ~comp_rslt};
   assign DOUT     = mux(DIN1, DIN0, comp_rslt);
   assign DOUT_VLD = enq;
   
+endmodule
+
+
+/***** A FIFO with only two entries                                       *****/
+/******************************************************************************/
+module TWO_ENTRY_FIFO #(parameter                    FIFO_WIDTH = 64)  // fifo width in bit
+                       (input  wire                  CLK, 
+                        input  wire                  RST, 
+                        input  wire                  enq, 
+                        input  wire                  deq, 
+                        input  wire [FIFO_WIDTH-1:0] din, 
+                        output wire [FIFO_WIDTH-1:0] dot, 
+                        output wire                  emp, 
+                        output wire                  full, 
+                        output reg  [1:0]            cnt);
+  
+  reg                  head, tail;
+  reg [FIFO_WIDTH-1:0] mem [1:0];
+
+  assign emp  = (cnt == 0);
+  assign full = (cnt == 2);
+  assign dot  = mem[head];
+
+  always @(posedge CLK) begin
+    if (RST) {cnt, head, tail} <= 0;
+    else begin
+      case ({enq, deq})
+        2'b01: begin                 head<=~head;              cnt<=cnt-1; end
+        2'b10: begin mem[tail]<=din;              tail<=~tail; cnt<=cnt+1; end
+        2'b11: begin mem[tail]<=din; head<=~head; tail<=~tail;             end
+      endcase
+    end
+  end
+  
+endmodule
+
+
+/***** A BlockRAM-based FIFO                                              *****/
+/******************************************************************************/
+module BFIFO #(parameter                    FIFO_SIZE  =  4,  // size in log scale, 4 for 16 entry
+               parameter                    FIFO_WIDTH = 32)  // fifo width in bit
+              (input  wire                  CLK, 
+               input  wire                  RST, 
+               input  wire                  enq, 
+               input  wire                  deq, 
+               input  wire [FIFO_WIDTH-1:0] din, 
+               output reg  [FIFO_WIDTH-1:0] dot, 
+               output wire                  emp, 
+               output wire                  full, 
+               output reg  [FIFO_SIZE:0]    cnt);
+  
+  reg [FIFO_SIZE-1:0]  head, tail;
+  reg [FIFO_WIDTH-1:0] mem [(1<<FIFO_SIZE)-1:0];
+
+  assign emp  = (cnt==0);
+  assign full = (cnt==(1<<FIFO_SIZE));
+  
+  always @(posedge CLK) dot <= mem[head];
+  
+  always @(posedge CLK) begin
+    if (RST) {cnt, head, tail} <= 0;
+    else begin
+      case ({enq, deq})
+        2'b01: begin                 head<=head+1;               cnt<=cnt-1; end
+        2'b10: begin mem[tail]<=din;               tail<=tail+1; cnt<=cnt+1; end
+        2'b11: begin mem[tail]<=din; head<=head+1; tail<=tail+1;             end
+      endcase
+    end
+  end
 endmodule
 
 
@@ -157,7 +224,8 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
                    input  wire                  RST,
                    input  wire                  ENQ,
                    input  wire [W_LOG-1:0]      ENQ_IDX,
-                   input  wire                  DEQ,
+                   input  wire                  DEQ0,
+                   input  wire                  DEQ1,
                    input  wire [W_LOG-2:0]      DEQ_IDX,
                    input  wire [FIFO_WIDTH-1:0] DIN, 
                    output wire [FIFO_WIDTH-1:0] DOT0,
@@ -168,7 +236,8 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
   wire                      even_enq = &{ENQ, ~ENQ_IDX[0]};
   wire                      odd_enq  = &{ENQ,  ENQ_IDX[0]};
   wire [W_LOG-2:0]          enq_idx  = (ENQ_IDX >> 1);
-  wire                      deq      = DEQ;
+  wire                      even_deq = DEQ0;
+  wire                      odd_deq  = DEQ1;
   wire [W_LOG-2:0]          deq_idx  = DEQ_IDX;
   wire [FIFO_WIDTH-1:0]     din      = DIN;
   wire [FIFO_WIDTH-1:0]     even_dot, odd_dot;
@@ -176,10 +245,10 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
   wire [(1<<(W_LOG-1))-1:0] even_full, odd_full;
   
   MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
-  even_numbered_fifo(CLK, RST, even_enq, enq_idx, deq, deq_idx, din, 
+  even_numbered_fifo(CLK, RST, even_enq, enq_idx, even_deq, deq_idx, din, 
                      even_dot, even_emp, even_full);
   MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
-  odd_numbered_fifo(CLK, RST, odd_enq, enq_idx, deq, deq_idx, din, 
+  odd_numbered_fifo(CLK, RST, odd_enq, enq_idx, odd_deq, deq_idx, din, 
                     odd_dot, odd_emp, odd_full);
   
   // Output
@@ -193,185 +262,90 @@ endmodule
 
 /*****  A sorter stage                                                    *****/
 /******************************************************************************/
-module SORTER_STAGE #() ();//todo from here
-endmodule
-
-
-
-
-/***** A BlockRAM-based FIFO                                              *****/
-/******************************************************************************/
-module BFIFO #(parameter                    FIFO_SIZE  =  4,  // size in log scale, 4 for 16 entry
-               parameter                    FIFO_WIDTH = 32)  // fifo width in bit
-              (input  wire                  CLK, 
-               input  wire                  RST, 
-               input  wire                  enq, 
-               input  wire                  deq, 
-               input  wire [FIFO_WIDTH-1:0] din, 
-               output reg  [FIFO_WIDTH-1:0] dot, 
-               output wire                  emp, 
-               output wire                  full, 
-               output reg  [FIFO_SIZE:0]    cnt);
+module SORTER_STAGE #(parameter               W_LOG     = 2,
+                      parameter               FIFO_SIZE = 2,
+                      parameter               DATW      = 64,
+                      parameter               KEYW      = 32) 
+                     (input  wire             CLK,
+                      input  wire             RST,
+                      input  wire             QUEUE_IN_FULL,
+                      input  wire [W_LOG-2:0] I_REQUEST,
+                      input  wire             I_REQUEST_VALID,
+                      input  wire [DATW-1:0]  DIN,
+                      input  wire             DINEN,
+                      input  wire [W_LOG-1:0] DIN_IDX,
+                      output wire             QUEUE_FULL,
+                      output wire [W_LOG-1:0] O_REQUEST,
+                      output wire             O_REQUEST_VALID,
+                      output wire [DATW-1:0]  DOT,
+                      output wire             DOTEN,
+                      output wire [W_LOG-2:0] DOT_IDX);
   
-  reg [FIFO_SIZE-1:0]  head, tail;
-  reg [FIFO_WIDTH-1:0] mem [(1<<FIFO_SIZE)-1:0];
-
-  assign emp  = (cnt==0);
-  assign full = (cnt==(1<<FIFO_SIZE));
+  wire             queue_enq;
+  wire             queue_deq;
+  wire [W_LOG-2:0] queue_din;
+  wire [W_LOG-2:0] queue_dot;
+  wire             queue_emp;
+  wire             queue_ful; 
+  wire [1:0]       queue_cnt; 
   
-  always @(posedge CLK) dot <= mem[head];
+  wire             ram_layer_enq;
+  wire [W_LOG-1:0] ram_layer_enq_idx;
+  wire             ram_layer_deq0;
+  wire             ram_layer_deq1;
+  wire [W_LOG-2:0] ram_layer_deq_idx;
+  wire [DATW-1:0]  ram_layer_din;
+  wire [DATW-1:0]  ram_layer_dot0;
+  wire [DATW-1:0]  ram_layer_dot1;
+  wire             ram_layer_emp0;
+  wire             ram_layer_emp1;
+
+  reg              comp_data_ready;
+  wire [DATW-1:0]  sorter_cell_dot;
+  wire             sorter_cell_doten;
+
+  wire             queue_deq_ready;
+
+  assign queue_deq_ready   = ~|{queue_emp,ram_layer_emp0,ram_layer_emp1};
   
-  always @(posedge CLK) begin
-    if (RST) {cnt, head, tail} <= 0;
-    else begin
-      case ({enq, deq})
-        2'b01: begin                 head<=head+1;               cnt<=cnt-1; end
-        2'b10: begin mem[tail]<=din;               tail<=tail+1; cnt<=cnt+1; end
-        2'b11: begin mem[tail]<=din; head<=head+1; tail<=tail+1;             end
-      endcase
-    end
-  end
-endmodule
+  assign queue_enq         = I_REQUEST_VALID;
+  assign queue_deq         = (comp_data_ready && queue_deq_ready);
+  assign queue_din         = I_REQUEST;
 
-
-
-
-
-/***** A FIFO with only two entries                                       *****/
-/******************************************************************************/
-module TWO_ENTRY_FIFO #(parameter                    FIFO_WIDTH = 64)  // fifo width in bit
-                       (input  wire                  CLK, 
-                        input  wire                  RST, 
-                        input  wire                  enq, 
-                        input  wire                  deq, 
-                        input  wire [FIFO_WIDTH-1:0] din, 
-                        output wire [FIFO_WIDTH-1:0] dot, 
-                        output wire                  emp, 
-                        output wire                  full, 
-                        output reg  [1:0]            cnt);
+  assign ram_layer_enq     = DINEN;
+  assign ram_layer_enq_idx = DIN_IDX;
+  assign ram_layer_deq_idx = queue_dot;
+  assign ram_layer_din     = DIN;
   
-  reg                  head, tail;
-  reg [FIFO_WIDTH-1:0] mem [1:0];
+  always @(posedge CLK) comp_data_ready <= queue_deq_ready;
 
-  assign emp  = (cnt == 0);
-  assign full = (cnt == 2);
-  assign dot  = mem[head];
+  TWO_ENTRY_FIFO #(W_LOG-1)
+  request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
+                queue_dot, queue_emp, queue_ful, queue_cnt);
 
-  always @(posedge CLK) begin
-    if (RST) {cnt, head, tail} <= 0;
-    else begin
-      case ({enq, deq})
-        2'b01: begin                 head<=~head;              cnt<=cnt-1; end
-        2'b10: begin mem[tail]<=din;              tail<=~tail; cnt<=cnt+1; end
-        2'b11: begin mem[tail]<=din; head<=~head; tail<=~tail;             end
-      endcase
-    end
-  end
-  
-endmodule
-
-
-/***** A node of the merge sorter tree                                    *****/
-/******************************************************************************/
-module TREE_NODE #(parameter              DATW = 64,
-                   parameter              KEYW = 32)
-                  (input  wire            CLK,
-                   input  wire            RST,
-                   input  wire            IN_FULL,
-                   input  wire [DATW-1:0] DIN0,
-                   input  wire            ENQ0,
-                   input  wire [DATW-1:0] DIN1,
-                   input  wire            ENQ1,
-                   output wire            FUL0,
-                   output wire            FUL1,
-                   output wire [DATW-1:0] DOUT,
-                   output wire            DOUT_VLD);
-
-  wire            fifo0_enq, fifo1_enq;
-  wire            fifo0_deq, fifo1_deq;
-  wire [DATW-1:0] fifo0_din, fifo1_din;
-  wire [DATW-1:0] fifo0_dot, fifo1_dot;
-  wire            fifo0_emp, fifo1_emp;
-  wire            fifo0_ful, fifo1_ful;
-  wire [1:0]      fifo0_cnt, fifo1_cnt;
-
-  wire [DATW-1:0] scell_dot;
-  wire            scell_doten;
-
-  assign fifo0_enq = ENQ0;
-  assign fifo1_enq = ENQ1;
-  assign fifo0_din = DIN0;
-  assign fifo1_din = DIN1;
-
-  TWO_ENTRY_FIFO #(DATW)
-  fifo0(CLK, RST, fifo0_enq, fifo0_deq, fifo0_din,
-        fifo0_dot, fifo0_emp, fifo0_ful, fifo0_cnt);
-  TWO_ENTRY_FIFO #(DATW)
-  fifo1(CLK, RST, fifo1_enq, fifo1_deq, fifo1_din,
-        fifo1_dot, fifo1_emp, fifo1_ful, fifo1_cnt);
+  RAM_LAYER #(W_LOG, FIFO_SIZE, DATW)
+  ram_layer(CLK, RST, ram_layer_enq, ram_layer_enq_idx, ram_layer_deq0, ram_layer_deq1, ram_layer_deq_idx, ram_layer_din, 
+            ram_layer_dot0, ram_layer_dot1, ram_layer_emp0, ram_layer_emp1);
   
   SORTER_CELL #(DATW, KEYW)
-  sorter_cell(fifo0_dot, fifo1_dot, ~fifo0_emp, ~fifo1_emp, IN_FULL, 
-              fifo0_deq, fifo1_deq, scell_dot, scell_doten);
-
-  // Output  
-  assign FUL0     = fifo0_ful;
-  assign FUL1     = fifo1_ful;
-  assign DOUT     = scell_dot;
-  assign DOUT_VLD = scell_doten;
-    
-endmodule
+  sorter_cell(ram_layer_dot0, ram_layer_dot1, queue_deq, 
+              ram_layer_deq0, ram_layer_deq1, sorter_cell_dot, sorter_cell_doten);
 
 
-/***** A merge sorter tree                                                *****/
-/******************************************************************************/
-module MERGE_SORTER_TREE #(parameter                       W_LOG = 2,
-                           parameter                       DATW  = 64,
-                           parameter                       KEYW  = 32)
-                          (input  wire                     CLK,
-                           input  wire                     RST,
-                           input  wire                     IN_FULL,
-                           input  wire [(DATW<<W_LOG)-1:0] DIN,
-                           input  wire [(1<<W_LOG)-1:0]    DINEN,
-                           output wire [(1<<W_LOG)-1:0]    FULL,
-                           output wire [DATW-1:0]          DOT,
-                           output wire                     DOTEN);
-
-  genvar i, j;
-  generate
-    for (i=0; i<W_LOG; i=i+1) begin: level
-      wire [(1<<(W_LOG-(i+1)))-1:0]    node_in_full;
-      wire [(DATW<<(W_LOG-i))-1:0]     node_din;
-      wire [(1<<(W_LOG-i))-1:0]        node_dinen;
-      wire [(1<<(W_LOG-i))-1:0]        node_full;
-      wire [(DATW<<(W_LOG-(i+1)))-1:0] node_dot;
-      wire [(1<<(W_LOG-(i+1)))-1:0]    node_doten;
-      for (j=0; j<(1<<(W_LOG-(i+1))); j=j+1) begin: nodes
-        TREE_NODE #(DATW, KEYW)
-        tree_node(CLK, RST, node_in_full[j], node_din[DATW*(2*j+1)-1:DATW*(2*j)], node_dinen[2*j], node_din[DATW*(2*j+2)-1:DATW*(2*j+1)], node_dinen[2*j+1], 
-                  node_full[2*j], node_full[2*j+1], node_dot[DATW*(j+1)-1:DATW*j], node_doten[j]);
-      end
-    end
-  endgenerate
-
-  generate
-    for (i=0; i<W_LOG; i=i+1) begin: connection
-      if (i == 0) begin
-        assign level[0].node_din   = DIN;
-        assign level[0].node_dinen = DINEN;
-        assign FULL                = level[0].node_full;
-      end else begin
-        assign level[i].node_din       = level[i-1].node_dot;
-        assign level[i].node_dinen     = level[i-1].node_doten;
-        assign level[i-1].node_in_full = level[i].node_full;
-      end
-    end
-  endgenerate
-
-  assign level[W_LOG-1].node_in_full = IN_FULL;
-  assign DOT                         = level[W_LOG-1].node_dot;
-  assign DOTEN                       = level[W_LOG-1].node_doten;
+  // Output
+  assign QUEUE_FULL = queue_ful;
+  // assign O_REQUEST =
+  // assign O_REQUEST_VALID =
+  assign DOT     = sorter_cell_dot;
+  assign DOTEN   = sorter_cell_doten;
+  assign DOT_IDX = queue_dot;
   
 endmodule
+
+
+
+
+
+
 
 `default_nettype wire
