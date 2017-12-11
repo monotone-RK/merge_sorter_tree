@@ -281,6 +281,17 @@ module SORTER_STAGE #(parameter               W_LOG     = 2,
                       output wire             DOTEN,
                       output wire [W_LOG-2:0] DOT_IDX);
   
+  function [W_LOG-1:0] request_gen;
+    input [W_LOG-1:0] in;
+    input [1:0]       sel;
+    begin
+      case (sel)
+        2'b01: request_gen = (in << 1);
+        2'b10: request_gen = (in << 1) + 1;
+      endcase
+    end
+  endfunction
+  
   wire             queue_enq;
   wire             queue_deq;
   wire [W_LOG-2:0] queue_din;
@@ -304,12 +315,14 @@ module SORTER_STAGE #(parameter               W_LOG     = 2,
   wire [DATW-1:0]  sorter_cell_dot;
   wire             sorter_cell_doten;
 
-  wire             queue_deq_ready;
+  reg              state;  // note!!!
 
-  assign queue_deq_ready   = ~|{queue_emp,ram_layer_emp0,ram_layer_emp1};
-  
+  reg              req_state;
+  reg [W_LOG-1:0]  request_4_emp;
+  reg              request_valid;
+
   assign queue_enq         = I_REQUEST_VALID;
-  assign queue_deq         = (comp_data_ready && queue_deq_ready);
+  assign queue_deq         = comp_data_ready;
   assign queue_din         = I_REQUEST;
 
   assign ram_layer_enq     = DINEN;
@@ -317,8 +330,6 @@ module SORTER_STAGE #(parameter               W_LOG     = 2,
   assign ram_layer_deq_idx = queue_dot;
   assign ram_layer_din     = DIN;
   
-  always @(posedge CLK) comp_data_ready <= queue_deq_ready;
-
   TWO_ENTRY_FIFO #(W_LOG-1)
   request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
                 queue_dot, queue_emp, queue_ful, queue_cnt);
@@ -328,24 +339,62 @@ module SORTER_STAGE #(parameter               W_LOG     = 2,
             ram_layer_dot0, ram_layer_dot1, ram_layer_emp0, ram_layer_emp1);
   
   SORTER_CELL #(DATW, KEYW)
-  sorter_cell(ram_layer_dot0, ram_layer_dot1, queue_deq, 
+  sorter_cell(ram_layer_dot0, ram_layer_dot1, comp_data_ready, 
               ram_layer_deq0, ram_layer_deq1, sorter_cell_dot, sorter_cell_doten);
 
+  always @(posedge CLK) begin
+    if      (ram_layer_emp0) request_4_emp <= ({1'b0, queue_dot} << 1);
+    else if (ram_layer_emp1) request_4_emp <= ({1'b0, queue_dot} << 1) + 1 ;
+  end
+
+  always @(posedge CLK) begin
+    if (RST) begin
+      req_state     <= 0;
+      request_valid <= 0;
+    end else begin
+      case (req_state)
+        0: begin
+          if (~|{QUEUE_IN_FULL,queue_emp}) begin
+            req_state     <= 1;
+            request_valid <= 1;
+          end
+        end
+        1: begin
+          req_state     <= 0;
+          request_valid <= 0;
+        end
+      endcase
+    end
+  end
+
+  always @(posedge CLK) begin
+    if (RST) begin
+      state           <= 0;
+      comp_data_ready <= 0;
+    end else begin
+      case (state)
+        0: begin
+          if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1}) begin
+            state           <= 1;
+            comp_data_ready <= 1;
+          end
+        end
+        1: begin
+          state           <= 0;
+          comp_data_ready <= 0;
+        end
+      endcase
+    end
+  end
 
   // Output
-  assign QUEUE_FULL = queue_ful;
-  // assign O_REQUEST =
-  // assign O_REQUEST_VALID =
-  assign DOT     = sorter_cell_dot;
-  assign DOTEN   = sorter_cell_doten;
-  assign DOT_IDX = queue_dot;
+  assign QUEUE_FULL      = queue_ful;
+  assign O_REQUEST       = (comp_data_ready) ? request_gen({1'b0, queue_dot}, {ram_layer_deq1,ram_layer_deq0}) : request_4_emp;
+  assign O_REQUEST_VALID = request_valid;
+  assign DOT             = sorter_cell_dot;
+  assign DOTEN           = sorter_cell_doten;
+  assign DOT_IDX         = queue_dot;
   
 endmodule
-
-
-
-
-
-
 
 `default_nettype wire
