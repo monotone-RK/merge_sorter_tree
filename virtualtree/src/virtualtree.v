@@ -73,41 +73,6 @@ module TWO_ENTRY_FIFO #(parameter                    FIFO_WIDTH = 64)  // fifo w
 endmodule
 
 
-/***** A BlockRAM-based FIFO                                              *****/
-/******************************************************************************/
-module BFIFO #(parameter                    FIFO_SIZE  =  4,  // size in log scale, 4 for 16 entry
-               parameter                    FIFO_WIDTH = 32)  // fifo width in bit
-              (input  wire                  CLK, 
-               input  wire                  RST, 
-               input  wire                  enq, 
-               input  wire                  deq, 
-               input  wire [FIFO_WIDTH-1:0] din, 
-               output reg  [FIFO_WIDTH-1:0] dot, 
-               output wire                  emp, 
-               output wire                  full, 
-               output reg  [FIFO_SIZE:0]    cnt);
-  
-  reg [FIFO_SIZE-1:0]  head, tail;
-  reg [FIFO_WIDTH-1:0] mem [(1<<FIFO_SIZE)-1:0];
-
-  assign emp  = (cnt==0);
-  assign full = (cnt==(1<<FIFO_SIZE));
-  
-  always @(posedge CLK) dot <= mem[head];
-  
-  always @(posedge CLK) begin
-    if (RST) {cnt, head, tail} <= 0;
-    else begin
-      case ({enq, deq})
-        2'b01: begin                 head<=head+1;               cnt<=cnt-1; end
-        2'b10: begin mem[tail]<=din;               tail<=tail+1; cnt<=cnt+1; end
-        2'b11: begin mem[tail]<=din; head<=head+1; tail<=tail+1;             end
-      endcase
-    end
-  end
-endmodule
-
-
 /***** An SRL(Shift Register LUT)-based FIFO                              *****/
 /******************************************************************************/
 module SRL_FIFO #(parameter                    FIFO_SIZE  = 4,   // size in log scale, 4 for 16 entry
@@ -260,26 +225,26 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
 endmodule
 
 
-/*****  A sorter stage                                                    *****/
+/*****  A body of the sorter stage                                        *****/
 /******************************************************************************/
-module SORTER_STAGE #(parameter               W_LOG     = 2,
-                      parameter               FIFO_SIZE = 2,
-                      parameter               DATW      = 64,
-                      parameter               KEYW      = 32) 
-                     (input  wire             CLK,
-                      input  wire             RST,
-                      input  wire             QUEUE_IN_FULL,
-                      input  wire [W_LOG-2:0] I_REQUEST,
-                      input  wire             I_REQUEST_VALID,
-                      input  wire [DATW-1:0]  DIN,
-                      input  wire             DINEN,
-                      input  wire [W_LOG-1:0] DIN_IDX,
-                      output wire             QUEUE_FULL,
-                      output wire [W_LOG-1:0] O_REQUEST,
-                      output wire             O_REQUEST_VALID,
-                      output wire [DATW-1:0]  DOT,
-                      output wire             DOTEN,
-                      output wire [W_LOG-2:0] DOT_IDX);
+module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
+                           parameter               FIFO_SIZE = 2,
+                           parameter               DATW      = 64,
+                           parameter               KEYW      = 32) 
+                          (input  wire             CLK,
+                           input  wire             RST,
+                           input  wire             QUEUE_IN_FULL,
+                           input  wire [W_LOG-2:0] I_REQUEST,
+                           input  wire             I_REQUEST_VALID,
+                           input  wire [DATW-1:0]  DIN,
+                           input  wire             DINEN,
+                           input  wire [W_LOG-1:0] DIN_IDX,
+                           output wire             QUEUE_FULL,
+                           output wire [W_LOG-1:0] O_REQUEST,
+                           output wire             O_REQUEST_VALID,
+                           output wire [DATW-1:0]  DOT,
+                           output wire             DOTEN,
+                           output wire [W_LOG-2:0] DOT_IDX);
   
   function [W_LOG-1:0] request_gen;
     input [W_LOG-1:0] in;
@@ -395,6 +360,144 @@ module SORTER_STAGE #(parameter               W_LOG     = 2,
   assign DOTEN           = sorter_cell_doten;
   assign DOT_IDX         = queue_dot;
   
+endmodule
+
+
+/*****  A root of the sorter stage                                        *****/
+/******************************************************************************/
+module SORTER_STAGE_ROOT #(parameter              FIFO_SIZE = 2,
+                           parameter              DATW      = 64,
+                           parameter              KEYW      = 32) 
+                          (input  wire            CLK,
+                           input  wire            RST,
+                           input  wire            QUEUE_IN_FULL,
+                           input  wire            IN_FULL,
+                           input  wire [DATW-1:0] DIN,
+                           input  wire            DINEN,
+                           input  wire            DIN_IDX,
+                           output wire            O_REQUEST,
+                           output wire            O_REQUEST_VALID,
+                           output wire [DATW-1:0] DOT,
+                           output wire            DOTEN);
+
+  wire               fifo0_enq;
+  wire               fifo0_deq;
+  wire [DATW-1:0]    fifo0_din;
+  wire [DATW-1:0]    fifo0_dot;
+  wire               fifo0_emp;
+  wire               fifo0_ful; 
+  wire [FIFO_SIZE:0] fifo0_cnt; 
+
+  wire               fifo1_enq;
+  wire               fifo1_deq;
+  wire [DATW-1:0]    fifo1_din;
+  wire [DATW-1:0]    fifo1_dot;
+  wire               fifo1_emp;
+  wire               fifo1_ful; 
+  wire [FIFO_SIZE:0] fifo1_cnt; 
+
+  wire               comp_data_ready;
+  wire [DATW-1:0]    sorter_cell_dot;
+  wire               sorter_cell_doten;
+  
+  assign fifo0_enq = &{DINEN, ~DIN_IDX};
+  assign fifo0_din = DIN;
+
+  assign fifo1_enq = &{DINEN,  DIN_IDX};
+  assign fifo1_din = DIN;
+
+  assign comp_data_ready = ~|{IN_FULL,fifo0_emp,fifo1_emp};
+  
+  SRL_FIFO #(FIFO_SIZE, DATW)
+  fifo0(CLK, RST, fifo0_enq, fifo0_deq, fifo0_din, 
+        fifo0_dot, fifo0_emp, fifo0_ful ,fifo0_cnt);
+  SRL_FIFO #(FIFO_SIZE, DATW)
+  fifo1(CLK, RST, fifo1_enq, fifo1_deq, fifo1_din, 
+        fifo1_dot, fifo1_emp, fifo1_ful ,fifo1_cnt);
+
+  SORTER_CELL #(DATW, KEYW)
+  sorter_cell(fifo0_dot, fifo1_dot, comp_data_ready, 
+              fifo0_deq, fifo1_deq, sorter_cell_dot, sorter_cell_doten);
+
+  // Output
+  assign O_REQUEST       = (comp_data_ready) ? fifo1_deq : ~fifo0_emp;
+  assign O_REQUEST_VALID = ~|{QUEUE_IN_FULL, IN_FULL};
+  assign DOT             = sorter_cell_dot;
+  assign DOTEN           = sorter_cell_doten;
+  
+endmodule
+
+
+/*****  A virtual merge sorter tree                                       *****/
+/******************************************************************************/
+module vMERGE_SORTER_TREE #(parameter               W_LOG     = 2,
+                            parameter               FIFO_SIZE = 2,
+                            parameter               DATW      = 64,
+                            parameter               KEYW      = 32)
+                           (input  wire             CLK,
+                            input  wire             RST, 
+                            input  wire             QUEUE_IN_FULL,
+                            input  wire             IN_FULL,
+                            input  wire [DATW-1:0]  DIN,
+                            input  wire             DINEN,
+                            input  wire [W_LOG-1:0] DIN_IDX,
+                            output wire [W_LOG-1:0] O_REQUEST,
+                            output wire             O_REQUEST_VALID,
+                            output wire [DATW-1:0]  DOT,
+                            output wire             DOTEN);
+
+  genvar i;
+  generate
+    for (i=0; i<W_LOG; i=i+1) begin: stage
+      wire            queue_in_full;
+      wire [DATW-1:0] din;
+      wire            dinen;
+      wire [i:0]      din_idx;
+      wire [i:0]      o_request;
+      wire            o_request_valid;
+      wire [DATW-1:0] dot;
+      wire            doten;
+      if (i == 0) begin: root
+        wire in_full;
+        SORTER_STAGE_ROOT #(FIFO_SIZE, DATW, KEYW)
+        sorter_stage_root(CLK, RST, queue_in_full, in_full, din, dinen, din_idx, 
+                          o_request, o_request_valid, dot, doten);
+      end else begin: body
+        wire [i-1:0] i_request;
+        wire         i_request_valid;
+        wire         queue_full;
+        wire [i-1:0] dot_idx;
+        SORTER_STAGE_BODY #((i+1), FIFO_SIZE, DATW, KEYW)
+        sorter_stage_body(CLK, RST, queue_in_full, i_request, i_request_valid, din, dinen, din_idx, 
+                          queue_full, o_request, o_request_valid, dot, doten, dot_idx);
+      end
+    end
+  endgenerate
+
+  generate
+    for (i=0; i<W_LOG; i=i+1) begin: connection
+      if (i == W_LOG-1) begin
+        assign stage[W_LOG-1].queue_in_full    = QUEUE_IN_FULL;
+        assign O_REQUEST                       = stage[W_LOG-1].o_request;
+        assign O_REQUEST_VALID                 = stage[W_LOG-1].o_request_valid;
+        assign stage[W_LOG-1].din              = DIN;
+        assign stage[W_LOG-1].dinen            = DINEN;
+        assign stage[W_LOG-1].din_idx          = DIN_IDX;
+      end else begin
+        assign stage[i].queue_in_full          = stage[i+1].body.queue_full;
+        assign stage[i+1].body.i_request       = stage[i].o_request;
+        assign stage[i+1].body.i_request_valid = stage[i].o_request_valid;
+        assign stage[i].din                    = stage[i+1].dot;
+        assign stage[i].dinen                  = stage[i+1].doten;
+        assign stage[i].din_idx                = stage[i+1].body.dot_idx;
+      end
+    end
+  endgenerate
+  
+  assign stage[0].root.in_full = IN_FULL;
+  assign DOT                   = stage[0].dot;
+  assign DOTEN                 = stage[0].doten;
+
 endmodule
 
 `default_nettype wire
