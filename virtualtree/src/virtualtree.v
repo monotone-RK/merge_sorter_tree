@@ -339,7 +339,7 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
     end else begin
       case (state)
         0: begin
-          if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1}) begin
+          if (~|{(req_state!=0),QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1}) begin
             state           <= 1;
             comp_data_ready <= 1;
           end

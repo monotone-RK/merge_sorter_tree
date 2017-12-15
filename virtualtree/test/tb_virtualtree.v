@@ -6,7 +6,7 @@
   
 `include "virtualtree.v"
 
-`define W_LOG      3
+`define W_LOG      5
 `define P_LOG      3
 `define FIFO_SIZE  2
 `define DATW      64
@@ -199,9 +199,12 @@ module tb_vMERGE_SORTER_TREE();
   wire [`W_LOG-1:0]                   tree_filler_dot_idx;
   wire [(1<<`W_LOG)-1:0]              tree_filler_emp;
 
+  wire [`DATW-1:0]                    vmerge_sorter_tree_dot;
+  wire                                vmerge_sorter_tree_doten;
+
   reg  [`W_LOG-1:0]                   round_robin_sel;
 
-  // reg [`DATW-1:0]                     check_record;
+  reg [`DATW-1:0]                     check_record;
 
   genvar i, j;
   generate
@@ -235,44 +238,50 @@ module tb_vMERGE_SORTER_TREE();
   tree_filler(CLK, RST, tree_filler_i_request, tree_filler_i_request_valid, tree_filler_din, tree_filler_dinen, tree_filler_waddr, 
               tree_filler_queue_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, tree_filler_emp);
   
-  // vMERGE_SORTER_TREE #(`W_LOG, `FIFO_SIZE, `DATW, `KEYW)
-  // vmerge_sorter_tree(CLK, RST, tree_filler_queue_full, 1'b0, );
+  vMERGE_SORTER_TREE #(`W_LOG, `FIFO_SIZE, `DATW, `KEYW)
+  vmerge_sorter_tree(CLK, RST, tree_filler_queue_full, 1'b0, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, 
+                     tree_filler_i_request, tree_filler_i_request_valid, vmerge_sorter_tree_dot, vmerge_sorter_tree_doten);
 
   // show result
   always @(posedge CLK) begin
     if (tree_filler_dinen) begin
-      case (`P_LOG)
-        1: $write("%d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
-        2: $write("%d %d %d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*3)-1:`DATW*3], tree_filler_din[(`KEYW+`DATW*2)-1:`DATW*2], tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
-        3: $write("%d %d %d %d %d %d %d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*7)-1:`DATW*7], tree_filler_din[(`KEYW+`DATW*6)-1:`DATW*6], tree_filler_din[(`KEYW+`DATW*5)-1:`DATW*5], tree_filler_din[(`KEYW+`DATW*4)-1:`DATW*4], tree_filler_din[(`KEYW+`DATW*3)-1:`DATW*3], tree_filler_din[(`KEYW+`DATW*2)-1:`DATW*2], tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
-      endcase
+      // case (`P_LOG)
+      //   1: $write("%d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
+      //   2: $write("%d %d %d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*3)-1:`DATW*3], tree_filler_din[(`KEYW+`DATW*2)-1:`DATW*2], tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
+      //   3: $write("%d %d %d %d %d %d %d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*7)-1:`DATW*7], tree_filler_din[(`KEYW+`DATW*6)-1:`DATW*6], tree_filler_din[(`KEYW+`DATW*5)-1:`DATW*5], tree_filler_din[(`KEYW+`DATW*4)-1:`DATW*4], tree_filler_din[(`KEYW+`DATW*3)-1:`DATW*3], tree_filler_din[(`KEYW+`DATW*2)-1:`DATW*2], tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
+      // endcase
+    end
+    if (!RST) begin
+      $write("| %d, %b ", round_robin_sel, tree_filler_emp);
+      if (tree_filler_i_request_valid) $write("| %4d ", tree_filler_i_request); else $write("|      ");
+      $write("| (%1d) ", tree_filler.queue_cnt);
+      if (!tree_filler.queue_emp) $write("%4d ", tree_filler.queue_dot); else $write("     ");
+      $write("(%1d) ", tree_filler.read_state);
+      if (tree_filler_doten) $write("| %d (%4d) ", tree_filler_dot[`KEYW-1:0], tree_filler_dot_idx); else $write("|                   ");
+      $write("#");
+      $write(" (%b) (0: %b, 1: %b) %b ", vmerge_sorter_tree.stage[`W_LOG-1].body.sorter_stage_body.req_state, vmerge_sorter_tree.stage[`W_LOG-1].body.sorter_stage_body.ram_layer_emp0, vmerge_sorter_tree.stage[`W_LOG-1].body.sorter_stage_body.ram_layer_emp1, vmerge_sorter_tree.stage[`W_LOG-1].body.sorter_stage_body.state);
+      $write("#");
+      if (vmerge_sorter_tree_doten) $write("%d", vmerge_sorter_tree_dot[`KEYW-1:0]);
       $write("\n");
       $fflush();
     end
   end
-  // always @(posedge CLK) begin
-  //   if (merge_sorter_tree_doten) begin
-  //     $write("%d", merge_sorter_tree_dot[`KEYW-1:0]);
-  //     $write("\n");
-  //     $fflush();
-  //   end
-  // end
 
-  // // error checker
-  // always @(posedge CLK) begin
-  //   if (RST) begin
-  //     check_record <= {{(`DATW-`KEYW){1'b1}}, `KEYW'b1};
-  //   end else begin
-  //     if (merge_sorter_tree_doten) begin
-  //       check_record <= check_record + 1;
-  //       if (merge_sorter_tree_dot != check_record) begin
-  //         $write("\nError!\n");
-  //         $write("%d %d\n", merge_sorter_tree_dot, check_record);
-  //         $finish();
-  //       end
-  //     end
-  //   end
-  // end
+  // error checker
+  always @(posedge CLK) begin
+    if (RST) begin
+      check_record <= {{(`DATW-`KEYW){1'b1}}, `KEYW'b1};
+    end else begin
+      if (vmerge_sorter_tree_doten) begin
+        check_record <= check_record + 1;
+        if (vmerge_sorter_tree_dot != check_record) begin
+          $write("\nError!\n");
+          $write("%d %d\n", vmerge_sorter_tree_dot[`KEYW-1:0], check_record[`KEYW-1:0]);
+          $finish();
+        end
+      end
+    end
+  end
   
   // simulation finish condition
   reg [31:0] cycle;
@@ -281,7 +290,7 @@ module tb_vMERGE_SORTER_TREE();
       cycle <= 0;
     end else begin
       cycle <= cycle + 1;
-      if (cycle >= 10) $finish();
+      if (cycle >= 1000) $finish();
     end
   end
 
