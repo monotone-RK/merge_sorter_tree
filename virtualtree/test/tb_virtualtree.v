@@ -4,12 +4,13 @@
 /******************************************************************************/
 `default_nettype none
   
-`include "mtree.v"
+`include "virtualtree.v"
 
-`define W_LOG 10
-`define DATW  64
-`define KEYW  32
-  
+`define W_LOG      3
+`define P_LOG      3
+`define FIFO_SIZE  2
+`define DATW      64
+`define KEYW      32
 
 module BRAM #(parameter               M_LOG = 2,  // memory size in log scale
               parameter               DATW  = 64)
@@ -180,61 +181,98 @@ module TREE_FILLER #(parameter                       W_LOG = 2,
 endmodule  
 
 
-module tb_MERGE_SORTER_TREE();
+module tb_vMERGE_SORTER_TREE();
   reg CLK; initial begin CLK=0; forever #50 CLK=~CLK; end
   reg RST; initial begin RST=1; #400 RST=0; end
   
-  wire [(`DATW<<`W_LOG)-1:0] merge_sorter_tree_din;
-  wire [(1<<`W_LOG)-1:0]     merge_sorter_tree_dinen;
-  wire [(1<<`W_LOG)-1:0]     merge_sorter_tree_ful;
-  wire [`DATW-1:0]           merge_sorter_tree_dot;
-  wire                       merge_sorter_tree_doten;
+  wire [`W_LOG-1:0]                   tree_filler_i_request;
+  wire                                tree_filler_i_request_valid;
+  wire [(`DATW<<(`W_LOG+`P_LOG))-1:0] tree_filler_din_all_way;
+  wire [(`DATW<<(`W_LOG+`P_LOG))-1:0] tree_filler_din_shifted;
+  wire [(`DATW<<`P_LOG)-1:0]          tree_filler_din;
+  wire [(1<<`W_LOG)-1:0]              tree_filler_dinen_all_way;
+  wire                                tree_filler_dinen;
+  wire [`W_LOG-1:0]                   tree_filler_waddr;
+  wire                                tree_filler_queue_full;
+  wire [`DATW-1:0]                    tree_filler_dot;
+  wire                                tree_filler_doten;
+  wire [`W_LOG-1:0]                   tree_filler_dot_idx;
+  wire [(1<<`W_LOG)-1:0]              tree_filler_emp;
 
-  reg [`DATW-1:0]            check_record;
+  reg  [`W_LOG-1:0]                   round_robin_sel;
 
-  assign merge_sorter_tree_dinen = ~merge_sorter_tree_ful;
-  
-  genvar i;
+  // reg [`DATW-1:0]                     check_record;
+
+  genvar i, j;
   generate
-    for (i=0; i<(1<<`W_LOG); i=i+1) begin: loop
-      wire [`KEYW-1:0] init_key = (1<<`W_LOG) - i;
-      reg  [`DATW-1:0] init_record;
-      always @(posedge CLK) begin
-        if      (RST)                        init_record <= {{(`DATW-`KEYW){1'b1}}, init_key};
-        else if (merge_sorter_tree_dinen[i]) init_record <= init_record + (1<<`W_LOG);
+    for (i=0; i<(1<<`W_LOG); i=i+1) begin: way
+      wire [(`DATW<<`P_LOG)-1:0] din_per_way;
+      for (j=0; j<(1<<`P_LOG); j=j+1) begin: record
+        wire [`KEYW-1:0] init_key = i + 1 + j * (1<<`W_LOG);
+        reg  [`DATW-1:0] init_record;
+        always @(posedge CLK) begin
+          if      (RST)                          init_record <= {{(`DATW-`KEYW){1'b1}}, init_key};
+          else if (tree_filler_dinen_all_way[i]) init_record <= init_record + (1<<(`W_LOG+`P_LOG));
+        end
+        assign din_per_way[`DATW*(j+1)-1:`DATW*j] = init_record;
       end
-      assign merge_sorter_tree_din[`DATW*(i+1)-1:`DATW*i] = init_record;
+      assign tree_filler_din_all_way[(`DATW<<`P_LOG)*(i+1)-1:(`DATW<<`P_LOG)*i] = din_per_way;
+      assign tree_filler_dinen_all_way[i]                                       = (round_robin_sel == i) && tree_filler_emp[i];
     end
   endgenerate
 
-  MERGE_SORTER_TREE #(`W_LOG, `DATW, `KEYW)
-  merge_sorter_tree(CLK, RST, 1'b0, merge_sorter_tree_din, merge_sorter_tree_dinen, 
-                    merge_sorter_tree_ful, merge_sorter_tree_dot, merge_sorter_tree_doten);
+  always @(posedge CLK) begin
+    if (RST) round_robin_sel <= 0;
+    else     round_robin_sel <= round_robin_sel + 1;
+  end
+
+  assign tree_filler_din_shifted = (tree_filler_din_all_way >> ((`DATW<<`P_LOG) * round_robin_sel));
+  assign tree_filler_din         = tree_filler_din_shifted[(`DATW<<`P_LOG)-1:0];
+  assign tree_filler_dinen       = (|tree_filler_dinen_all_way) && (~RST);
+  assign tree_filler_waddr       = round_robin_sel;
+
+  TREE_FILLER #(`W_LOG, `P_LOG)
+  tree_filler(CLK, RST, tree_filler_i_request, tree_filler_i_request_valid, tree_filler_din, tree_filler_dinen, tree_filler_waddr, 
+              tree_filler_queue_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, tree_filler_emp);
+  
+  // vMERGE_SORTER_TREE #(`W_LOG, `FIFO_SIZE, `DATW, `KEYW)
+  // vmerge_sorter_tree(CLK, RST, tree_filler_queue_full, 1'b0, );
 
   // show result
   always @(posedge CLK) begin
-    if (merge_sorter_tree_doten) begin
-      $write("%d", merge_sorter_tree_dot[`KEYW-1:0]);
+    if (tree_filler_dinen) begin
+      case (`P_LOG)
+        1: $write("%d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
+        2: $write("%d %d %d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*3)-1:`DATW*3], tree_filler_din[(`KEYW+`DATW*2)-1:`DATW*2], tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
+        3: $write("%d %d %d %d %d %d %d %d | %d, %b", tree_filler_din[(`KEYW+`DATW*7)-1:`DATW*7], tree_filler_din[(`KEYW+`DATW*6)-1:`DATW*6], tree_filler_din[(`KEYW+`DATW*5)-1:`DATW*5], tree_filler_din[(`KEYW+`DATW*4)-1:`DATW*4], tree_filler_din[(`KEYW+`DATW*3)-1:`DATW*3], tree_filler_din[(`KEYW+`DATW*2)-1:`DATW*2], tree_filler_din[(`KEYW+`DATW*1)-1:`DATW*1], tree_filler_din[(`KEYW+`DATW*0)-1:`DATW*0], round_robin_sel, tree_filler_emp);
+      endcase
       $write("\n");
       $fflush();
     end
   end
+  // always @(posedge CLK) begin
+  //   if (merge_sorter_tree_doten) begin
+  //     $write("%d", merge_sorter_tree_dot[`KEYW-1:0]);
+  //     $write("\n");
+  //     $fflush();
+  //   end
+  // end
 
-  // error checker
-  always @(posedge CLK) begin
-    if (RST) begin
-      check_record <= {{(`DATW-`KEYW){1'b1}}, `KEYW'b1};
-    end else begin
-      if (merge_sorter_tree_doten) begin
-        check_record <= check_record + 1;
-        if (merge_sorter_tree_dot != check_record) begin
-          $write("\nError!\n");
-          $write("%d %d\n", merge_sorter_tree_dot, check_record);
-          $finish();
-        end
-      end
-    end
-  end
+  // // error checker
+  // always @(posedge CLK) begin
+  //   if (RST) begin
+  //     check_record <= {{(`DATW-`KEYW){1'b1}}, `KEYW'b1};
+  //   end else begin
+  //     if (merge_sorter_tree_doten) begin
+  //       check_record <= check_record + 1;
+  //       if (merge_sorter_tree_dot != check_record) begin
+  //         $write("\nError!\n");
+  //         $write("%d %d\n", merge_sorter_tree_dot, check_record);
+  //         $finish();
+  //       end
+  //     end
+  //   end
+  // end
   
   // simulation finish condition
   reg [31:0] cycle;
@@ -243,7 +281,7 @@ module tb_MERGE_SORTER_TREE();
       cycle <= 0;
     end else begin
       cycle <= cycle + 1;
-      if (cycle >= 200) $finish();
+      if (cycle >= 10) $finish();
     end
   end
 
