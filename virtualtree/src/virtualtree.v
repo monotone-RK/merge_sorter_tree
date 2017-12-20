@@ -428,23 +428,23 @@ module SORTER_STAGE_ROOT #(parameter              FIFO_SIZE = 2,
 endmodule
 
 
-/*****  A virtual merge sorter tree                                       *****/
+/***** A tree of sorter stage                                             *****/
 /******************************************************************************/
-module vMERGE_SORTER_TREE #(parameter               W_LOG     = 2,
-                            parameter               FIFO_SIZE = 2,
-                            parameter               DATW      = 64,
-                            parameter               KEYW      = 32)
-                           (input  wire             CLK,
-                            input  wire             RST, 
-                            input  wire             QUEUE_IN_FULL,
-                            input  wire             IN_FULL,
-                            input  wire [DATW-1:0]  DIN,
-                            input  wire             DINEN,
-                            input  wire [W_LOG-1:0] DIN_IDX,
-                            output wire [W_LOG-1:0] O_REQUEST,
-                            output wire             O_REQUEST_VALID,
-                            output wire [DATW-1:0]  DOT,
-                            output wire             DOTEN);
+module SORTER_STAGE_TREE #(parameter               W_LOG     = 2,
+                           parameter               FIFO_SIZE = 2,
+                           parameter               DATW      = 64,
+                           parameter               KEYW      = 32)
+                          (input  wire             CLK,
+                           input  wire             RST, 
+                           input  wire             QUEUE_IN_FULL,
+                           input  wire             IN_FULL,
+                           input  wire [DATW-1:0]  DIN,
+                           input  wire             DINEN,
+                           input  wire [W_LOG-1:0] DIN_IDX,
+                           output wire [W_LOG-1:0] O_REQUEST,
+                           output wire             O_REQUEST_VALID,
+                           output wire [DATW-1:0]  DOT,
+                           output wire             DOTEN);
 
   genvar i;
   generate
@@ -499,5 +499,260 @@ module vMERGE_SORTER_TREE #(parameter               W_LOG     = 2,
   assign DOTEN                 = stage[0].doten;
 
 endmodule
+
+
+/*****  A multi-channel FIFO with one entry                               *****/
+/******************************************************************************/
+module _MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # of channels in log scale
+                             parameter                    FIFO_WIDTH = 32)
+                            (input  wire                  CLK,
+                             input  wire                  RST,
+                             input  wire                  enq,
+                             input  wire [C_LOG-1:0]      enq_idx,
+                             input  wire                  deq,
+                             input  wire [C_LOG-1:0]      deq_idx,
+                             input  wire [FIFO_WIDTH-1:0] din,
+                             output reg  [FIFO_WIDTH-1:0] dot,
+                             output wire [(1<<C_LOG)-1:0] emp,
+                             output wire [(1<<C_LOG)-1:0] full);
+
+  reg [(1<<C_LOG)-1:0] head_list;
+  reg [(1<<C_LOG)-1:0] tail_list;
+
+  reg [FIFO_WIDTH-1:0] mem [(1<<C_LOG)-1:0];
+     
+  genvar i;
+  generate
+    for (i=0; i<(1<<C_LOG); i=i+1) begin: channels
+      assign emp[i]  = (head_list[i] ==  tail_list[i]);
+      assign full[i] = (head_list[i] == ~tail_list[i]);
+    end
+  endgenerate
+  
+  wire [C_LOG-1:0] raddr = deq_idx;
+  wire [C_LOG-1:0] waddr = enq_idx;
+  
+  always @(posedge CLK) dot <= mem[raddr];
+
+  always @(posedge CLK) begin
+    if (RST) begin
+      head_list <= 0;
+      tail_list <= 0;
+    end else begin
+      case ({enq, deq})
+        2'b01: begin 
+          head_list[deq_idx] <= ~head_list[deq_idx];
+        end
+        2'b10: begin 
+          mem[waddr]         <= din;
+          tail_list[enq_idx] <= ~tail_list[enq_idx]; 
+        end
+        2'b11: begin 
+          mem[waddr]         <= din; 
+          head_list[deq_idx] <= ~head_list[deq_idx]; 
+          tail_list[enq_idx] <= ~tail_list[enq_idx]; 
+        end
+      endcase
+    end
+  end
+  
+endmodule
+  
+
+/***** A BlockRAM module                                                  *****/
+/******************************************************************************/
+module BRAM #(parameter               M_LOG = 2,  // memory size in log scale
+              parameter               DATW  = 64)
+             (input  wire             CLK,
+              input  wire             WE,
+              input  wire [M_LOG-1:0] RADDR,
+              input  wire [M_LOG-1:0] WADDR,
+              input  wire [DATW-1:0]  DIN,
+              output reg  [DATW-1:0]  DOT);
+
+  reg [DATW-1:0] mem [(1<<M_LOG)-1:0];
+  
+  always @(posedge CLK) DOT  <= mem[RADDR];
+  always @(posedge CLK) if (WE) mem[WADDR] <= DIN;
+  
+endmodule  
+
+
+/***** A tree filler                                                      *****/
+/******************************************************************************/
+module TREE_FILLER #(parameter                       W_LOG = 2,
+                     parameter                       P_LOG = 3,  // sorting network size in log scale
+                     parameter                       DATW  = 64)
+                    (input  wire                     CLK,
+                     input  wire                     RST,
+                     input  wire [W_LOG-1:0]         I_REQUEST,
+                     input  wire                     I_REQUEST_VALID,
+                     input  wire [(DATW<<P_LOG)-1:0] DIN,
+                     input  wire                     DINEN,
+                     input  wire [W_LOG-1:0]         DIN_IDX,
+                     output wire                     QUEUE_FULL,
+                     output wire [DATW-1:0]          DOT,
+                     output wire                     DOTEN,
+                     output wire [W_LOG-1:0]         DOT_IDX,
+                     output wire [(1<<W_LOG)-1:0]    emp);
+  
+  localparam NUM_RECORD = (1<<P_LOG);
+
+  wire                     queue_enq;
+  wire                     queue_deq;
+  wire [W_LOG-1:0]         queue_din;
+  wire [W_LOG-1:0]         queue_dot;
+  wire                     queue_emp;
+  wire                     queue_ful; 
+  wire [1:0]               queue_cnt; 
+
+  wire                     mfifo_enq;
+  wire [W_LOG-1:0]         mfifo_enq_idx;
+  wire                     mfifo_deq;
+  wire [W_LOG-1:0]         mfifo_deq_idx;
+  wire [(DATW<<P_LOG)-1:0] mfifo_din;
+  wire [(DATW<<P_LOG)-1:0] mfifo_dot;
+  wire [(1<<W_LOG)-1:0]    mfifo_emp;
+  wire [(1<<W_LOG)-1:0]    mfifo_ful;
+
+  reg  [(DATW<<P_LOG)-1:0] shifted_data;
+
+  reg  [P_LOG-1:0]         read_cnt [(1<<W_LOG)-1:0];
+  reg  [W_LOG-1:0]         read_raddr;
+  reg  [1:0]               read_state;
+  reg                      state_one;
+  reg                      data_ready;
+  reg                      requeue_deq;
+  reg  [(1<<W_LOG)-1:0]    almost_be_emp;
+
+  assign queue_enq     = I_REQUEST_VALID;
+  assign queue_deq     = state_one || &{requeue_deq,~queue_emp,(read_raddr == mfifo_deq_idx)};
+  assign queue_din     = I_REQUEST;
+
+  assign mfifo_enq     = DINEN;
+  assign mfifo_enq_idx = DIN_IDX;
+  assign mfifo_deq     = &{queue_deq,almost_be_emp[mfifo_deq_idx]};
+  assign mfifo_deq_idx = queue_dot;
+  assign mfifo_din     = DIN;
+
+  TWO_ENTRY_FIFO #(W_LOG)
+  request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
+                queue_dot, queue_emp, queue_ful, queue_cnt);
+
+  _MULTI_CHANNEL_FIFO #(W_LOG, (DATW<<P_LOG))
+  _multi_channel_fifo(CLK, RST, mfifo_enq, mfifo_enq_idx, mfifo_deq, mfifo_deq_idx, mfifo_din, 
+                      mfifo_dot, mfifo_emp, mfifo_ful);
+
+  always @(posedge CLK) begin
+    shifted_data <= mfifo_dot >> (DATW * read_cnt[mfifo_deq_idx]);
+  end
+
+  integer p;  
+  always @(posedge CLK) begin
+    if (RST) begin
+      for (p=0; p<(1<<W_LOG); p=p+1) read_cnt[p] <= 0;
+      read_raddr    <= 0;
+      read_state    <= 0;
+      state_one     <= 0;
+      data_ready    <= 0;
+      requeue_deq   <= 0;
+      almost_be_emp <= 0;
+    end else begin
+      case (read_state)
+        0: begin
+          data_ready <= 0;
+          if (~|{queue_emp,emp[mfifo_deq_idx]}) begin
+            read_state <= 1;
+            state_one  <= 1;
+          end
+        end
+        1: begin  // mfifo_dot has been set
+          read_raddr                <= mfifo_deq_idx;
+          read_state                <= (almost_be_emp[mfifo_deq_idx]) ? 0 : 2;
+          state_one                 <= 0;
+          read_cnt[mfifo_deq_idx]   <= read_cnt[mfifo_deq_idx] + 1;
+          data_ready                <= 1;
+          requeue_deq               <= 1;
+          almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
+        end
+        2: begin  // shifted_data has been set
+          if (!queue_emp && (read_raddr == mfifo_deq_idx)) begin
+            read_cnt[mfifo_deq_idx]      <= read_cnt[mfifo_deq_idx] + 1;
+            almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
+            if (almost_be_emp[mfifo_deq_idx]) begin
+              read_state  <= 0;
+              requeue_deq <= 0;
+            end
+          end else begin
+            read_state  <= 0;
+            data_ready  <= 0;
+            requeue_deq <= 0;
+          end
+        end
+      endcase
+    end
+  end
+  
+  assign QUEUE_FULL = queue_ful;
+  assign DOT        = shifted_data[DATW-1:0];
+  assign DOTEN      = data_ready;
+  assign DOT_IDX    = read_raddr;
+  assign emp        = mfifo_emp;
+
+endmodule  
+
+
+/***** A virtual merge sorter tree                                       *****/
+/******************************************************************************/
+module vMERGE_SORTER_TREE #(parameter                       W_LOG     = 2,
+                            parameter                       P_LOG     = 3,
+                            parameter                       FIFO_SIZE = 2,
+                            parameter                       DATW      = 64,
+                            parameter                       KEYW      = 32)
+                           (input  wire                     CLK,
+                            input  wire                     RST, 
+                            input  wire                     IN_FULL,
+                            input  wire [(DATW<<P_LOG)-1:0] DIN,
+                            input  wire                     DINEN,
+                            input  wire [W_LOG-1:0]         DIN_IDX,
+                            output wire [DATW-1:0]          DOT,
+                            output wire                     DOTEN,
+                            output wire [(1<<W_LOG)-1:0]    emp);
+
+  wire [W_LOG-1:0]         tree_filler_i_request;
+  wire                     tree_filler_i_request_valid;
+  wire [(DATW<<P_LOG)-1:0] tree_filler_din;
+  wire                     tree_filler_dinen;
+  wire [W_LOG-1:0]         tree_filler_din_idx;
+  wire                     tree_filler_queue_full;
+  wire [DATW-1:0]          tree_filler_dot;
+  wire                     tree_filler_doten;
+  wire [W_LOG-1:0]         tree_filler_dot_idx;
+  wire [(1<<W_LOG)-1:0]    tree_filler_emp;
+
+  wire                     sorter_stage_tree_in_full;
+  wire [DATW-1:0]          sorter_stage_tree_dot;
+  wire                     sorter_stage_tree_doten;
+  
+  assign tree_filler_din           = DIN;
+  assign tree_filler_dinen         = DINEN;
+  assign tree_filler_din_idx       = DIN_IDX;
+
+  assign sorter_stage_tree_in_full = IN_FULL;
+  
+  TREE_FILLER #(W_LOG, P_LOG, DATW)
+  tree_filler(CLK, RST, tree_filler_i_request, tree_filler_i_request_valid, tree_filler_din, tree_filler_dinen, tree_filler_din_idx, 
+              tree_filler_queue_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, tree_filler_emp);
+  
+  SORTER_STAGE_TREE #(W_LOG, FIFO_SIZE, DATW, KEYW)
+  sorter_stage_tree(CLK, RST, tree_filler_queue_full, sorter_stage_tree_in_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, 
+                     tree_filler_i_request, tree_filler_i_request_valid, sorter_stage_tree_dot, sorter_stage_tree_doten);
+  
+  // Output
+  assign DOT   = sorter_stage_tree_dot;
+  assign DOTEN = sorter_stage_tree_doten;
+  assign emp   = tree_filler_emp;
+
+endmodule  
 
 `default_nettype wire
