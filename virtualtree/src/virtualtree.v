@@ -128,6 +128,7 @@ module MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # o
                             input  wire [C_LOG-1:0]      enq_idx,
                             input  wire                  deq,
                             input  wire [C_LOG-1:0]      deq_idx,
+                            input  wire [C_LOG-1:0]      _deq_idx,
                             input  wire [FIFO_WIDTH-1:0] din,
                             output reg  [FIFO_WIDTH-1:0] dot,
                             output wire [(1<<C_LOG)-1:0] emp,
@@ -147,7 +148,7 @@ module MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # o
     end
   endgenerate
   
-  wire [(C_LOG+FIFO_SIZE)-1:0] raddr = {deq_idx, head_list[deq_idx][FIFO_SIZE-1:0]};
+  wire [(C_LOG+FIFO_SIZE)-1:0] raddr = {_deq_idx, head_list[_deq_idx][FIFO_SIZE-1:0]};
   wire [(C_LOG+FIFO_SIZE)-1:0] waddr = {enq_idx, tail_list[enq_idx][FIFO_SIZE-1:0]};
   
   always @(posedge CLK) dot <= mem[raddr];
@@ -192,6 +193,7 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
                    input  wire                  DEQ0,
                    input  wire                  DEQ1,
                    input  wire [W_LOG-2:0]      DEQ_IDX,
+                   input  wire [W_LOG-2:0]      _DEQ_IDX,
                    input  wire [FIFO_WIDTH-1:0] DIN, 
                    output wire [FIFO_WIDTH-1:0] DOT0,
                    output wire [FIFO_WIDTH-1:0] DOT1,
@@ -204,23 +206,24 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
   wire                      even_deq = DEQ0;
   wire                      odd_deq  = DEQ1;
   wire [W_LOG-2:0]          deq_idx  = DEQ_IDX;
+  wire [W_LOG-2:0]          _deq_idx  = _DEQ_IDX;
   wire [FIFO_WIDTH-1:0]     din      = DIN;
   wire [FIFO_WIDTH-1:0]     even_dot, odd_dot;
   wire [(1<<(W_LOG-1))-1:0] even_emp, odd_emp;
   wire [(1<<(W_LOG-1))-1:0] even_full, odd_full;
   
   MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
-  even_numbered_fifo(CLK, RST, even_enq, enq_idx, even_deq, deq_idx, din, 
+  even_numbered_fifo(CLK, RST, even_enq, enq_idx, even_deq, deq_idx, _deq_idx, din, 
                      even_dot, even_emp, even_full);
   MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
-  odd_numbered_fifo(CLK, RST, odd_enq, enq_idx, odd_deq, deq_idx, din, 
+  odd_numbered_fifo(CLK, RST, odd_enq, enq_idx, odd_deq, deq_idx, _deq_idx, din, 
                     odd_dot, odd_emp, odd_full);
   
   // Output
   assign DOT0 = even_dot;
   assign DOT1 = odd_dot;
-  assign EMP0 = even_emp[deq_idx];
-  assign EMP1 = odd_emp[deq_idx];
+  assign EMP0 = even_emp[_deq_idx];
+  assign EMP1 = odd_emp[_deq_idx];
   
 endmodule
 
@@ -280,14 +283,14 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   wire [DATW-1:0]  sorter_cell_dot;
   wire             sorter_cell_doten;
 
-  reg              state;  // note!!!
+  reg  [1:0]       state;  // note!!!
 
   reg              req_state;
   reg [W_LOG-1:0]  request_4_emp;
   reg              request_valid;
 
   assign queue_enq         = I_REQUEST_VALID;
-  assign queue_deq         = comp_data_ready;
+  assign queue_deq         = ~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1};
   assign queue_din         = I_REQUEST;
 
   assign ram_layer_enq     = DINEN;
@@ -300,7 +303,7 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
                 queue_dot, queue_emp, queue_ful, queue_cnt);
 
   RAM_LAYER #(W_LOG, FIFO_SIZE, DATW)
-  ram_layer(CLK, RST, ram_layer_enq, ram_layer_enq_idx, ram_layer_deq0, ram_layer_deq1, ram_layer_deq_idx, ram_layer_din, 
+  ram_layer(CLK, RST, ram_layer_enq, ram_layer_enq_idx, ram_layer_deq0, ram_layer_deq1, queue_dot_buf, queue_dot, ram_layer_din, 
             ram_layer_dot0, ram_layer_dot1, ram_layer_emp0, ram_layer_emp1);
   
   SORTER_CELL #(DATW, KEYW)
@@ -312,54 +315,56 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
     else if (ram_layer_emp1) request_4_emp <= ({1'b0, queue_dot} << 1) + 1 ;
   end
 
+  reg [W_LOG-2:0] queue_dot_buf;
   always @(posedge CLK) begin
     if (RST) begin
-      req_state     <= 0;
-      request_valid <= 0;
-    end else begin
-      case (req_state)
-        0: begin
-          if (~|{QUEUE_IN_FULL,queue_emp}) begin
-            req_state     <= 1;
-            request_valid <= 1;
-          end
-        end
-        1: begin
-          req_state     <= 0;
-          request_valid <= 0;
-        end
-      endcase
-    end
-  end
-
-  always @(posedge CLK) begin
-    if (RST) begin
+      queue_dot_buf   <= 0;
       state           <= 0;
       comp_data_ready <= 0;
+      request_valid   <= 0;
     end else begin
+      queue_dot_buf <= queue_dot;
       case (state)
         0: begin
-          if (~|{(req_state!=0),QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1}) begin
-            state           <= 1;
-            comp_data_ready <= 1;
+          if (~|{QUEUE_IN_FULL,queue_emp}) begin
+            request_valid <= 1;
+            if (~|{ram_layer_emp0,ram_layer_emp1}) begin
+              state           <= 1;
+              comp_data_ready <= 1;
+            end 
+          end else begin
+            request_valid <= 0;
           end
         end
         1: begin
-          state           <= 0;
-          comp_data_ready <= 0;
+          if (~|{queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
+            state           <= 2;
+          end else begin
+            state           <= 0;
+            comp_data_ready <= 0;
+            request_valid   <= 0;
+          end
+        end
+        2: begin
+          if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
+            state           <= 2;
+          end else begin
+            state           <= 0;
+            comp_data_ready <= 0;
+            request_valid   <= 0;
+          end
         end
       endcase
     end
   end
 
-  // Output
-  assign QUEUE_FULL      = queue_ful;
-  assign O_REQUEST       = (comp_data_ready) ? request_gen({1'b0, queue_dot}, {ram_layer_deq1,ram_layer_deq0}) : request_4_emp;
+  assign QUEUE_FULL = queue_ful;
+  assign O_REQUEST  = (comp_data_ready) ? request_gen({1'b0, queue_dot_buf}, {ram_layer_deq1,ram_layer_deq0}) : request_4_emp;
   assign O_REQUEST_VALID = request_valid;
-  assign DOT             = sorter_cell_dot;
-  assign DOTEN           = sorter_cell_doten;
-  assign DOT_IDX         = queue_dot;
-  
+  assign DOT        = sorter_cell_dot;
+  assign DOTEN      = sorter_cell_doten;
+  assign DOT_IDX    = queue_dot_buf;
+
 endmodule
 
 
@@ -580,9 +585,10 @@ endmodule
 
 /***** A tree filler                                                      *****/
 /******************************************************************************/
-module TREE_FILLER #(parameter                       W_LOG = 2,
-                     parameter                       P_LOG = 3,  // sorting network size in log scale
-                     parameter                       DATW  = 64)
+module TREE_FILLER #(parameter                       W_LOG     = 2,
+                     parameter                       P_LOG     = 3,  // sorting network size in log scale
+                     parameter                       FIFO_SIZE = 2,
+                     parameter                       DATW      = 64)
                     (input  wire                     CLK,
                      input  wire                     RST,
                      input  wire [W_LOG-1:0]         I_REQUEST,
@@ -619,20 +625,22 @@ module TREE_FILLER #(parameter                       W_LOG = 2,
 
   reg  [P_LOG-1:0]         read_cnt [(1<<W_LOG)-1:0];
   reg  [W_LOG-1:0]         read_raddr;
-  reg  [1:0]               read_state;
+  reg  [2:0]               read_state;
   reg                      state_one;
   reg                      data_ready;
   reg                      requeue_deq;
   reg  [(1<<W_LOG)-1:0]    almost_be_emp;
+  reg                      init_done;
+  reg [W_LOG-1:0]          init_deq_idx;
 
-  assign queue_enq     = I_REQUEST_VALID;
+  assign queue_enq     = I_REQUEST_VALID && init_done;
   assign queue_deq     = state_one || &{requeue_deq,~queue_emp,(read_raddr == mfifo_deq_idx)};
   assign queue_din     = I_REQUEST;
 
   assign mfifo_enq     = DINEN;
   assign mfifo_enq_idx = DIN_IDX;
   assign mfifo_deq     = &{queue_deq,almost_be_emp[mfifo_deq_idx]};
-  assign mfifo_deq_idx = queue_dot;
+  assign mfifo_deq_idx = (init_done) ? queue_dot : init_deq_idx;
   assign mfifo_din     = DIN;
 
   TWO_ENTRY_FIFO #(W_LOG)
@@ -657,34 +665,62 @@ module TREE_FILLER #(parameter                       W_LOG = 2,
       data_ready    <= 0;
       requeue_deq   <= 0;
       almost_be_emp <= 0;
+      ////// for init (begin)
+      init_done     <= 0;
+      init_deq_idx  <= 0;
+      ////// for init (end)
     end else begin
       case (read_state)
+        ////// for init (begin)
         0: begin
+          if (!init_done) begin if (!emp[mfifo_deq_idx]) read_state <= 1; end
+          else            begin                          read_state <= 3; end
+        end
+        1: begin  // mfifo_dot has been set
+          read_raddr              <= mfifo_deq_idx;
+          read_state              <= 2;
+          read_cnt[mfifo_deq_idx] <= read_cnt[mfifo_deq_idx] + 1;
+          data_ready              <= 1;
+        end
+        2: begin  // shifted_data has been set
+          if (read_cnt[mfifo_deq_idx] == (1<<FIFO_SIZE)) begin
+            read_state   <= 0;
+            data_ready   <= 0;
+            init_deq_idx <= init_deq_idx + 1;
+            if (init_deq_idx == (1<<W_LOG)-1) begin
+              init_done <= 1;
+            end
+          end else begin
+            read_cnt[mfifo_deq_idx] <= read_cnt[mfifo_deq_idx] + 1;
+          end
+        end
+        ////// for init (end)
+        3: begin
           data_ready <= 0;
           if (~|{queue_emp,emp[mfifo_deq_idx]}) begin
-            read_state <= 1;
+            read_state <= 4;
             state_one  <= 1;
           end
         end
-        1: begin  // mfifo_dot has been set
+        4: begin  // mfifo_dot has been set
           read_raddr                <= mfifo_deq_idx;
-          read_state                <= (almost_be_emp[mfifo_deq_idx]) ? 0 : 2;
+          read_state                <= (almost_be_emp[mfifo_deq_idx]) ? 3 : 5;
           state_one                 <= 0;
           read_cnt[mfifo_deq_idx]   <= read_cnt[mfifo_deq_idx] + 1;
           data_ready                <= 1;
           requeue_deq               <= 1;
           almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
         end
-        2: begin  // shifted_data has been set
+        5: begin  // shifted_data has been set
           if (!queue_emp && (read_raddr == mfifo_deq_idx)) begin
             read_cnt[mfifo_deq_idx]      <= read_cnt[mfifo_deq_idx] + 1;
             almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
             if (almost_be_emp[mfifo_deq_idx]) begin
-              read_state  <= 0;
+              read_state  <= 3;
               requeue_deq <= 0;
             end
           end else begin
-            read_state  <= 0;
+            read_state  <= 3;
             data_ready  <= 0;
             requeue_deq <= 0;
           end
@@ -692,7 +728,7 @@ module TREE_FILLER #(parameter                       W_LOG = 2,
       endcase
     end
   end
-  
+
   assign QUEUE_FULL = queue_ful;
   assign DOT        = shifted_data[DATW-1:0];
   assign DOTEN      = data_ready;
@@ -740,7 +776,7 @@ module vMERGE_SORTER_TREE #(parameter                       W_LOG     = 2,
 
   assign sorter_stage_tree_in_full = IN_FULL;
   
-  TREE_FILLER #(W_LOG, P_LOG, DATW)
+  TREE_FILLER #(W_LOG, P_LOG, FIFO_SIZE, DATW)
   tree_filler(CLK, RST, tree_filler_i_request, tree_filler_i_request_valid, tree_filler_din, tree_filler_dinen, tree_filler_din_idx, 
               tree_filler_queue_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, tree_filler_emp);
   

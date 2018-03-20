@@ -6,7 +6,8 @@
   
 `include "virtualtree.v"
 
-`define W_LOG      5
+`define W_LOG      3
+// `define W_LOG      6
 `define P_LOG      3
 `define FIFO_SIZE  2
 `define DATW      64
@@ -67,7 +68,13 @@ module tb_vMERGE_SORTER_TREE();
   always @(posedge CLK) begin
     if (!RST) begin
       $write("| %d, %b ", round_robin_sel, vmerge_sorter_tree_emp);
-      if (vmerge_sorter_tree_doten) $write("%d", vmerge_sorter_tree_dot[`KEYW-1:0]);
+      $write("| %b ", vmerge_sorter_tree.tree_filler.init_done);
+      $write("| %d ", vmerge_sorter_tree.tree_filler.init_deq_idx);
+      $write("| %d ", vmerge_sorter_tree.tree_filler.read_state);
+      if (vmerge_sorter_tree.tree_filler_doten) $write("%d(%d) ", vmerge_sorter_tree.tree_filler_dot[`KEYW-1:0], vmerge_sorter_tree.tree_filler_dot_idx);
+      else $write("              ");
+      $write("||");
+      // if (vmerge_sorter_tree_doten) $write("%d", vmerge_sorter_tree_dot[`KEYW-1:0]);
       $write("\n");
       $fflush();
     end
