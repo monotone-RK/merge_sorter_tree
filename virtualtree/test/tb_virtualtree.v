@@ -6,9 +6,10 @@
   
 `include "virtualtree.v"
 
-// `define W_LOG      5
-`define W_LOG      6
+`define W_LOG      5
+// `define W_LOG      7
 `define P_LOG      3
+`define Q_SIZE     2
 `define FIFO_SIZE  2
 `define DATW      64
 `define KEYW      32
@@ -60,7 +61,7 @@ module tb_vMERGE_SORTER_TREE();
   assign vmerge_sorter_tree_dinen   = (|tree_filler_dinen_all_way) && (~RST);
   assign vmerge_sorter_tree_din_idx = round_robin_sel;
   
-  vMERGE_SORTER_TREE #(`W_LOG, `P_LOG, `FIFO_SIZE, `DATW, `KEYW)
+  vMERGE_SORTER_TREE #(`W_LOG, `P_LOG, `Q_SIZE, `FIFO_SIZE, `DATW, `KEYW)
   vmerge_sorter_tree(CLK, RST, 1'b0, vmerge_sorter_tree_din, vmerge_sorter_tree_dinen, vmerge_sorter_tree_din_idx, 
                      vmerge_sorter_tree_dot, vmerge_sorter_tree_doten, vmerge_sorter_tree_emp);
 

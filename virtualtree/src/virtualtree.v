@@ -74,6 +74,40 @@ module TWO_ENTRY_FIFO #(parameter                    FIFO_WIDTH = 64)  // fifo w
 endmodule
 
 
+/***** A Distributed RAM-based FIFO                                       *****/
+/******************************************************************************/
+module DFIFO #(parameter                    FIFO_SIZE  =  4,  // size in log scale, 4 for 16 entry
+               parameter                    FIFO_WIDTH = 32)  // fifo width in bit
+              (input  wire                  CLK, 
+               input  wire                  RST, 
+               input  wire                  enq, 
+               input  wire                  deq, 
+               input  wire [FIFO_WIDTH-1:0] din, 
+               output wire [FIFO_WIDTH-1:0] dot, 
+               output wire                  emp, 
+               output wire                  full, 
+               output reg  [FIFO_SIZE:0]    cnt);
+  
+  reg [FIFO_SIZE-1:0]  head, tail;
+  reg [FIFO_WIDTH-1:0] mem [(1<<FIFO_SIZE)-1:0];
+
+  assign emp  = (cnt==0);
+  assign full = (cnt>=(1<<FIFO_SIZE)-1);
+  assign dot  = mem[head];
+  
+  always @(posedge CLK) begin
+    if (RST) {cnt, head, tail} <= 0;
+    else begin
+      case ({enq, deq})
+        2'b01: begin                 head<=head+1;               cnt<=cnt-1; end
+        2'b10: begin mem[tail]<=din;               tail<=tail+1; cnt<=cnt+1; end
+        2'b11: begin mem[tail]<=din; head<=head+1; tail<=tail+1;             end
+      endcase
+    end
+  end
+endmodule
+
+
 /***** An SRL(Shift Register LUT)-based FIFO                              *****/
 /******************************************************************************/
 module SRL_FIFO #(parameter                    FIFO_SIZE  = 4,   // size in log scale, 4 for 16 entry
@@ -232,6 +266,7 @@ endmodule
 /*****  A body of the sorter stage                                        *****/
 /******************************************************************************/
 module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
+                           parameter               Q_SIZE    = 2,
                            parameter               FIFO_SIZE = 2,
                            parameter               DATW      = 64,
                            parameter               KEYW      = 32) 
@@ -267,7 +302,10 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   wire [W_LOG-2:0] queue_dot;
   wire             queue_emp;
   wire             queue_ful; 
-  wire [1:0]       queue_cnt; 
+  // wire [1:0]       queue_cnt; 
+  wire [Q_SIZE:0]  queue_cnt; 
+  
+  reg [W_LOG-2:0]  queue_dot_buf;
   
   wire             ram_layer_enq;
   wire [W_LOG-1:0] ram_layer_enq_idx;
@@ -284,7 +322,8 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   wire [DATW-1:0]  sorter_cell_dot;
   wire             sorter_cell_doten;
 
-  reg  [1:0]       state;  // note!!!
+  // reg  [1:0]       state;  // note!!!
+  reg  [0:0]       state;  // note!!!
 
   reg              req_state;
   reg [W_LOG-1:0]  request_4_emp;
@@ -299,7 +338,8 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   assign ram_layer_deq_idx = queue_dot;
   assign ram_layer_din     = DIN;
   
-  TWO_ENTRY_FIFO #(W_LOG-1)
+  // TWO_ENTRY_FIFO #(W_LOG-1)
+  DFIFO #(Q_SIZE, W_LOG-1)
   request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
                 queue_dot, queue_emp, queue_ful, queue_cnt);
 
@@ -316,7 +356,6 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
     else if (ram_layer_emp1) request_4_emp <= ({1'b0, queue_dot} << 1) + 1 ;
   end
 
-  reg [W_LOG-2:0] queue_dot_buf;
   always @(posedge CLK) begin
     if (RST) begin
       queue_dot_buf   <= 0;
@@ -327,44 +366,47 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
       queue_dot_buf <= queue_dot;
       case (state)
         0: begin
-          if (~|{QUEUE_IN_FULL,queue_emp}) begin
-            request_valid <= 1;
-            if (~|{ram_layer_emp0,ram_layer_emp1}) begin
-              state           <= 1;
-              comp_data_ready <= 1;
-            end 
-          end else begin
-            request_valid <= 0;
+          if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1}) begin
+            state           <= 1;
+            comp_data_ready <= 1;
           end
+          request_valid <= (~|{QUEUE_IN_FULL,queue_emp});
         end
         1: begin
-          if (~|{queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
-            state           <= 2;
-          end else begin
+          if (|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
             state           <= 0;
             comp_data_ready <= 0;
             request_valid   <= 0;
           end
         end
-        2: begin
-          if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
-            state           <= 2;
-          end else begin
-            state           <= 0;
-            comp_data_ready <= 0;
-            request_valid   <= 0;
-          end
-        end
+        // 1: begin
+        //   if (~|{queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
+        //     state           <= 2;
+        //   end else begin
+        //     state           <= 0;
+        //     comp_data_ready <= 0;
+        //     request_valid   <= 0;
+        //   end
+        // end
+        // 2: begin
+        //   if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
+        //     state           <= 2;
+        //   end else begin
+        //     state           <= 0;
+        //     comp_data_ready <= 0;
+        //     request_valid   <= 0;
+        //   end
+        // end
       endcase
     end
   end
 
-  assign QUEUE_FULL = queue_ful;
-  assign O_REQUEST  = (comp_data_ready) ? request_gen({1'b0, queue_dot_buf}, {ram_layer_deq1,ram_layer_deq0}) : request_4_emp;
+  assign QUEUE_FULL      = queue_ful;
+  assign O_REQUEST       = (comp_data_ready) ? request_gen({1'b0, queue_dot_buf}, {ram_layer_deq1,ram_layer_deq0}) : request_4_emp;
   assign O_REQUEST_VALID = request_valid;
-  assign DOT        = sorter_cell_dot;
-  assign DOTEN      = sorter_cell_doten;
-  assign DOT_IDX    = queue_dot_buf;
+  assign DOT             = sorter_cell_dot;
+  assign DOTEN           = sorter_cell_doten;
+  assign DOT_IDX         = queue_dot_buf;
 
 endmodule
 
@@ -437,6 +479,7 @@ endmodule
 /***** A tree of sorter stage                                             *****/
 /******************************************************************************/
 module SORTER_STAGE_TREE #(parameter               W_LOG     = 2,
+                           parameter               Q_SIZE    = 2,
                            parameter               FIFO_SIZE = 2,
                            parameter               DATW      = 64,
                            parameter               KEYW      = 32)
@@ -473,7 +516,7 @@ module SORTER_STAGE_TREE #(parameter               W_LOG     = 2,
         wire         i_request_valid;
         wire         queue_full;
         wire [i-1:0] dot_idx;
-        SORTER_STAGE_BODY #((i+1), FIFO_SIZE, DATW, KEYW)
+        SORTER_STAGE_BODY #((i+1), Q_SIZE, FIFO_SIZE, DATW, KEYW)
         sorter_stage_body(CLK, RST, queue_in_full, i_request, i_request_valid, din, dinen, din_idx, 
                           queue_full, o_request, o_request_valid, dot, doten, dot_idx);
       end
@@ -588,6 +631,7 @@ endmodule
 /******************************************************************************/
 module TREE_FILLER #(parameter                       W_LOG     = 2,
                      parameter                       P_LOG     = 3,  // sorting network size in log scale
+                     parameter                       Q_SIZE    = 2,
                      parameter                       FIFO_SIZE = 2,
                      parameter                       DATW      = 64)
                     (input  wire                     CLK,
@@ -611,7 +655,8 @@ module TREE_FILLER #(parameter                       W_LOG     = 2,
   wire [W_LOG-1:0]         queue_dot;
   wire                     queue_emp;
   wire                     queue_ful; 
-  wire [1:0]               queue_cnt; 
+  // wire [1:0]               queue_cnt; 
+  wire [Q_SIZE:0]          queue_cnt; 
 
   wire                     mfifo_enq;
   wire [W_LOG-1:0]         mfifo_enq_idx;
@@ -644,7 +689,8 @@ module TREE_FILLER #(parameter                       W_LOG     = 2,
   assign mfifo_deq_idx = (init_done) ? queue_dot : init_deq_idx;
   assign mfifo_din     = DIN;
 
-  TWO_ENTRY_FIFO #(W_LOG)
+  // TWO_ENTRY_FIFO #(W_LOG)
+  DFIFO #(Q_SIZE, W_LOG)
   request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
                 queue_dot, queue_emp, queue_ful, queue_cnt);
 
@@ -743,6 +789,7 @@ endmodule
 /******************************************************************************/
 module vMERGE_SORTER_TREE #(parameter                       W_LOG     = 2,
                             parameter                       P_LOG     = 3,
+                            parameter                       Q_SIZE    = 2,
                             parameter                       FIFO_SIZE = 2,
                             parameter                       DATW      = 64,
                             parameter                       KEYW      = 32)
@@ -777,11 +824,11 @@ module vMERGE_SORTER_TREE #(parameter                       W_LOG     = 2,
 
   assign sorter_stage_tree_in_full = IN_FULL;
   
-  TREE_FILLER #(W_LOG, P_LOG, FIFO_SIZE, DATW)
+  TREE_FILLER #(W_LOG, P_LOG, Q_SIZE, FIFO_SIZE, DATW)
   tree_filler(CLK, RST, tree_filler_i_request, tree_filler_i_request_valid, tree_filler_din, tree_filler_dinen, tree_filler_din_idx, 
               tree_filler_queue_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, tree_filler_emp);
   
-  SORTER_STAGE_TREE #(W_LOG, FIFO_SIZE, DATW, KEYW)
+  SORTER_STAGE_TREE #(W_LOG, Q_SIZE, FIFO_SIZE, DATW, KEYW)
   sorter_stage_tree(CLK, RST, tree_filler_queue_full, sorter_stage_tree_in_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, 
                      tree_filler_i_request, tree_filler_i_request_valid, sorter_stage_tree_dot, sorter_stage_tree_doten);
   
