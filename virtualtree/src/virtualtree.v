@@ -56,7 +56,8 @@ module TWO_ENTRY_FIFO #(parameter                    FIFO_WIDTH = 64)  // fifo w
   reg [FIFO_WIDTH-1:0] mem [1:0];
 
   assign emp  = (cnt == 0);
-  assign full = (cnt == 2);
+  // assign full = (cnt == 2);
+  assign full = (cnt >= 1);
   assign dot  = mem[head];
 
   always @(posedge CLK) begin

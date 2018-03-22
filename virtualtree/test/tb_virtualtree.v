@@ -6,8 +6,8 @@
   
 `include "virtualtree.v"
 
-`define W_LOG      3
-// `define W_LOG      6
+// `define W_LOG      5
+`define W_LOG      6
 `define P_LOG      3
 `define FIFO_SIZE  2
 `define DATW      64
@@ -69,12 +69,28 @@ module tb_vMERGE_SORTER_TREE();
     if (!RST) begin
       $write("| %d, %b ", round_robin_sel, vmerge_sorter_tree_emp);
       $write("| %b ", vmerge_sorter_tree.tree_filler.init_done);
-      $write("| %d ", vmerge_sorter_tree.tree_filler.init_deq_idx);
-      $write("| %d ", vmerge_sorter_tree.tree_filler.read_state);
-      if (vmerge_sorter_tree.tree_filler_doten) $write("%d(%d) ", vmerge_sorter_tree.tree_filler_dot[`KEYW-1:0], vmerge_sorter_tree.tree_filler_dot_idx);
+      $write("| %d ", vmerge_sorter_tree.tree_filler.queue_cnt);
+      $write("|state: %d ", vmerge_sorter_tree.tree_filler.read_state);
+      if (vmerge_sorter_tree.tree_filler_doten) $write("%8d(%4d) ", vmerge_sorter_tree.tree_filler_dot[`KEYW-1:0], vmerge_sorter_tree.tree_filler_dot_idx);
+      else $write("               ");
+      $write("||");
+      $write("state: %d ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.state);
+      $write("| %b %b ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.QUEUE_IN_FULL, vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_emp);
+      $write("| %d ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_cnt);
+      if (vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].o_request_valid) $write(" %4d ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].o_request);
+      else $write("      ");
+      if (vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].doten) $write("%8d(%3d) ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].dot[`KEYW-1:0], vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-1].body.dot_idx);
       else $write("              ");
       $write("||");
-      // if (vmerge_sorter_tree_doten) $write("%d", vmerge_sorter_tree_dot[`KEYW-1:0]);
+      $write("state: %d ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.state);
+      $write("| %b %b ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.QUEUE_IN_FULL, vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_emp);
+      $write("| %d ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_cnt);
+      if (vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].o_request_valid) $write(" %3d ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].o_request);
+      else $write("     ");
+      if (vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].doten) $write("%8d(%3d) ", vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].dot[`KEYW-1:0], vmerge_sorter_tree.sorter_stage_tree.stage[`W_LOG-2].body.dot_idx);
+      else $write("              ");
+      $write("||");
+      if (vmerge_sorter_tree_doten) $write(" %d ", vmerge_sorter_tree_dot[`KEYW-1:0]);
       $write("\n");
       $fflush();
     end
@@ -103,7 +119,8 @@ module tb_vMERGE_SORTER_TREE();
       cycle <= 0;
     end else begin
       cycle <= cycle + 1;
-      if (cycle >= 1000) $finish();
+      // if (cycle >= 1000) $finish();
+      if (cycle >= 10000) $finish();
     end
   end
 
