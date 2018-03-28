@@ -3,7 +3,7 @@
 # T    : src file name you want to test
 # PRE  : test bench prefix (Write test bench file like tb_hoge.v)
 # POST : filename extension
-T=virtualtree
+T=virtualtree_random
 PRE=tb_
 POST=.v
 
@@ -42,6 +42,12 @@ dump:
 # view:
 # 	$(GTK)
 
+initdatagen:
+	g++ -O3 -Wall -Wextra -g -std=c++11 initdatagen.cc -o initdatagen
+
+diff:
+	diff -s $(LOG) answer.txt
+
 clean:
-	rm -rf $(TARGET) $(VCD) $(LOG) csrc $(TARGET).daidir ucli.key
+	rm -rf $(TARGET) $(VCD) $(LOG) csrc $(TARGET).daidir ucli.key initdatagen initdata.hex answer.txt
 
