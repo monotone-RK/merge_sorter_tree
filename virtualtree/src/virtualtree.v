@@ -159,6 +159,7 @@ module MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # o
                             parameter                    FIFO_WIDTH = 32)
                            (input  wire                  CLK,
                             input  wire                  RST,
+                            input  wire                  same_request,
                             input  wire                  enq,
                             input  wire [C_LOG-1:0]      enq_idx,
                             input  wire                  deq,
@@ -167,7 +168,8 @@ module MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # o
                             input  wire [FIFO_WIDTH-1:0] din,
                             output reg  [FIFO_WIDTH-1:0] dot,
                             output wire [(1<<C_LOG)-1:0] emp,
-                            output wire [(1<<C_LOG)-1:0] full);
+                            output wire [(1<<C_LOG)-1:0] full,
+                            output wire [(1<<C_LOG)-1:0] one_elem);
 
   // FIFO_SIZE-1 -> FIFO_SIZE (to generate emp and full)
   reg [FIFO_SIZE:0] head_list [(1<<C_LOG)-1:0];
@@ -178,15 +180,18 @@ module MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # o
   genvar i;
   generate
     for (i=0; i<(1<<C_LOG); i=i+1) begin: channels
-      assign emp[i]  = (head_list[i] == tail_list[i]);
-      assign full[i] = (head_list[i] == {~tail_list[i][FIFO_SIZE], tail_list[i][FIFO_SIZE-1:0]});
+      assign emp[i]      = (head_list[i] == tail_list[i]);
+      assign full[i]     = (head_list[i] == {~tail_list[i][FIFO_SIZE], tail_list[i][FIFO_SIZE-1:0]});
+      assign one_elem[i] = (head_list[i] + 1 == tail_list[i]);
     end
   endgenerate
   
   wire [(C_LOG+FIFO_SIZE)-1:0] raddr = {_deq_idx, head_list[_deq_idx][FIFO_SIZE-1:0]};
   wire [(C_LOG+FIFO_SIZE)-1:0] waddr = {enq_idx, tail_list[enq_idx][FIFO_SIZE-1:0]};
+  wire [(C_LOG+FIFO_SIZE)-1:0] raddr_4_same_req = {_deq_idx, (head_list[_deq_idx][FIFO_SIZE-1:0] + 1'b1)};
   
-  always @(posedge CLK) dot <= mem[raddr];
+  // always @(posedge CLK) dot <= mem[raddr];
+  always @(posedge CLK) dot <= mem[(same_request) ? raddr_4_same_req : raddr];
 
   integer p;
   always @(posedge CLK) begin
@@ -223,6 +228,7 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
                    parameter                    FIFO_WIDTH = 32)
                   (input  wire                  CLK,
                    input  wire                  RST,
+                   input  wire                  SAME_REQUEST,  // note!!!
                    input  wire                  ENQ,
                    input  wire [W_LOG-1:0]      ENQ_IDX,
                    input  wire                  DEQ0,
@@ -233,7 +239,9 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
                    output wire [FIFO_WIDTH-1:0] DOT0,
                    output wire [FIFO_WIDTH-1:0] DOT1,
                    output wire                  EMP0,
-                   output wire                  EMP1);
+                   output wire                  EMP1,
+                   output wire                  ONE_ELEM0,
+                   output wire                  ONE_ELEM1);
 
   wire                      even_enq = &{ENQ, ~ENQ_IDX[0]};
   wire                      odd_enq  = &{ENQ,  ENQ_IDX[0]};
@@ -241,24 +249,33 @@ module RAM_LAYER #(parameter                    W_LOG      = 2,
   wire                      even_deq = DEQ0;
   wire                      odd_deq  = DEQ1;
   wire [W_LOG-2:0]          deq_idx  = DEQ_IDX;
-  wire [W_LOG-2:0]          _deq_idx  = _DEQ_IDX;
+  wire [W_LOG-2:0]          _deq_idx = _DEQ_IDX;
   wire [FIFO_WIDTH-1:0]     din      = DIN;
   wire [FIFO_WIDTH-1:0]     even_dot, odd_dot;
   wire [(1<<(W_LOG-1))-1:0] even_emp, odd_emp;
   wire [(1<<(W_LOG-1))-1:0] even_full, odd_full;
+  wire [(1<<(W_LOG-1))-1:0] even_one_elem, odd_one_elem;
   
+  // MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
+  // even_numbered_fifo(CLK, RST, even_enq, enq_idx, even_deq, deq_idx, _deq_idx, din, 
+  //                    even_dot, even_emp, even_full);
+  // MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
+  // odd_numbered_fifo(CLK, RST, odd_enq, enq_idx, odd_deq, deq_idx, _deq_idx, din, 
+  //                   odd_dot, odd_emp, odd_full);
   MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
-  even_numbered_fifo(CLK, RST, even_enq, enq_idx, even_deq, deq_idx, _deq_idx, din, 
-                     even_dot, even_emp, even_full);
+  even_numbered_fifo(CLK, RST, SAME_REQUEST, even_enq, enq_idx, even_deq, deq_idx, _deq_idx, din, 
+                     even_dot, even_emp, even_full, even_one_elem);
   MULTI_CHANNEL_FIFO #((W_LOG-1), FIFO_SIZE, FIFO_WIDTH)
-  odd_numbered_fifo(CLK, RST, odd_enq, enq_idx, odd_deq, deq_idx, _deq_idx, din, 
-                    odd_dot, odd_emp, odd_full);
+  odd_numbered_fifo(CLK, RST, SAME_REQUEST, odd_enq, enq_idx, odd_deq, deq_idx, _deq_idx, din, 
+                    odd_dot, odd_emp, odd_full, odd_one_elem);
   
   // Output
   assign DOT0 = even_dot;
   assign DOT1 = odd_dot;
   assign EMP0 = even_emp[_deq_idx];
   assign EMP1 = odd_emp[_deq_idx];
+  assign ONE_ELEM0 = even_one_elem[_deq_idx];
+  assign ONE_ELEM1 = odd_one_elem[_deq_idx];
   
 endmodule
 
@@ -302,7 +319,6 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   wire [W_LOG-2:0] queue_dot;
   wire             queue_emp;
   wire             queue_ful; 
-  // wire [1:0]       queue_cnt; 
   wire [Q_SIZE:0]  queue_cnt; 
   
   reg [W_LOG-2:0]  queue_dot_buf;
@@ -317,12 +333,16 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   wire [DATW-1:0]  ram_layer_dot1;
   wire             ram_layer_emp0;
   wire             ram_layer_emp1;
+  wire             ram_layer_almost_emp0;
+  wire             ram_layer_almost_emp1;
 
+  wire [DATW-1:0]  sorter_cell_din0;
+  wire [DATW-1:0]  sorter_cell_din1;
+  wire             sorter_cell_din_rdy;
   reg              comp_data_ready;
   wire [DATW-1:0]  sorter_cell_dot;
   wire             sorter_cell_doten;
 
-  // reg  [1:0]       state;  // note!!!
   reg  [0:0]       state;  // note!!!
 
   reg              req_state;
@@ -338,18 +358,32 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
   assign ram_layer_deq_idx = queue_dot;
   assign ram_layer_din     = DIN;
   
-  // TWO_ENTRY_FIFO #(W_LOG-1)
+  assign sorter_cell_din0    = (same_request_buf && unselected_0) ? unselected_data : ram_layer_dot0;
+  assign sorter_cell_din1    = (same_request_buf && unselected_1) ? unselected_data : ram_layer_dot1;
+  assign sorter_cell_din_rdy = (same_request_buf) ? (~|{ram_layer_almost_emp0_buf,ram_layer_almost_emp1_buf}) : comp_data_ready;
+  
   DFIFO #(Q_SIZE, W_LOG-1)
   request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
                 queue_dot, queue_emp, queue_ful, queue_cnt);
 
+  // RAM_LAYER #(W_LOG, FIFO_SIZE, DATW)
+  // ram_layer(CLK, RST, ram_layer_enq, ram_layer_enq_idx, ram_layer_deq0, ram_layer_deq1, queue_dot_buf, queue_dot, ram_layer_din, 
+  //           ram_layer_dot0, ram_layer_dot1, ram_layer_emp0, ram_layer_emp1);
   RAM_LAYER #(W_LOG, FIFO_SIZE, DATW)
-  ram_layer(CLK, RST, ram_layer_enq, ram_layer_enq_idx, ram_layer_deq0, ram_layer_deq1, queue_dot_buf, queue_dot, ram_layer_din, 
-            ram_layer_dot0, ram_layer_dot1, ram_layer_emp0, ram_layer_emp1);
+  ram_layer(CLK, RST, same_request, ram_layer_enq, ram_layer_enq_idx, ram_layer_deq0, ram_layer_deq1, queue_dot_buf, queue_dot, ram_layer_din, 
+            ram_layer_dot0, ram_layer_dot1, ram_layer_emp0, ram_layer_emp1, ram_layer_almost_emp0, ram_layer_almost_emp1);
   
+  // SORTER_CELL #(DATW, KEYW)
+  // sorter_cell(ram_layer_dot0, ram_layer_dot1, comp_data_ready, 
+  //             ram_layer_deq0, ram_layer_deq1, sorter_cell_dot, sorter_cell_doten);
   SORTER_CELL #(DATW, KEYW)
-  sorter_cell(ram_layer_dot0, ram_layer_dot1, comp_data_ready, 
-              ram_layer_deq0, ram_layer_deq1, sorter_cell_dot, sorter_cell_doten);
+  sorter_cell(sorter_cell_din0, 
+              sorter_cell_din1, 
+              sorter_cell_din_rdy, 
+              ram_layer_deq0, 
+              ram_layer_deq1, 
+              sorter_cell_dot, 
+              sorter_cell_doten);
 
   always @(posedge CLK) begin
     if      (ram_layer_emp0) request_4_emp <= ({1'b0, queue_dot} << 1);
@@ -373,37 +407,52 @@ module SORTER_STAGE_BODY #(parameter               W_LOG     = 2,
           request_valid <= (~|{QUEUE_IN_FULL,queue_emp});
         end
         1: begin
-          if (|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
+          // todo from here
+          // if (|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
+          if (|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1}) begin
             state           <= 0;
             comp_data_ready <= 0;
             request_valid   <= 0;
           end
         end
-        // 1: begin
-        //   if (~|{queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
-        //     state           <= 2;
-        //   end else begin
-        //     state           <= 0;
-        //     comp_data_ready <= 0;
-        //     request_valid   <= 0;
-        //   end
-        // end
-        // 2: begin
-        //   if (~|{QUEUE_IN_FULL,queue_emp,ram_layer_emp0,ram_layer_emp1,(queue_dot_buf == queue_dot)}) begin
-        //     state           <= 2;
-        //   end else begin
-        //     state           <= 0;
-        //     comp_data_ready <= 0;
-        //     request_valid   <= 0;
-        //   end
-        // end
       endcase
     end
   end
 
+  // add begin
+  reg [DATW-1:0] unselected_data;
+  reg            unselected_0;
+  reg            unselected_1;
+  reg            ram_layer_almost_emp0_buf;
+  reg            ram_layer_almost_emp1_buf;
+  always @(posedge CLK) begin
+    case ({ram_layer_deq1,ram_layer_deq0})
+      2'b01: begin 
+        unselected_data           <= sorter_cell_din1;
+        unselected_0              <= 0; 
+        unselected_1              <= 1;
+        ram_layer_almost_emp0_buf <= ram_layer_almost_emp0;
+        ram_layer_almost_emp1_buf <= 0;
+      end
+      2'b10: begin 
+        unselected_data           <= sorter_cell_din0; 
+        unselected_0              <= 1; 
+        unselected_1              <= 0; 
+        ram_layer_almost_emp0_buf <= 0;
+        ram_layer_almost_emp1_buf <= ram_layer_almost_emp1;
+      end
+    endcase
+  end
+
+  wire same_request = sorter_cell_doten && queue_deq && (queue_dot_buf == queue_dot);
+  reg  same_request_buf;
+  always @(posedge CLK) same_request_buf <= same_request;
+  // add end
+  
   assign QUEUE_FULL      = queue_ful;
   assign O_REQUEST       = (comp_data_ready) ? request_gen({1'b0, queue_dot_buf}, {ram_layer_deq1,ram_layer_deq0}) : request_4_emp;
-  assign O_REQUEST_VALID = request_valid;
+  // assign O_REQUEST_VALID = request_valid;
+  assign O_REQUEST_VALID = (same_request_buf) ? (~|{ram_layer_almost_emp0_buf,ram_layer_almost_emp1_buf}) : request_valid;
   assign DOT             = sorter_cell_dot;
   assign DOTEN           = sorter_cell_doten;
   assign DOT_IDX         = queue_dot_buf;
