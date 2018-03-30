@@ -3,7 +3,7 @@
 # T    : src file name you want to test
 # PRE  : test bench prefix (Write test bench file like tb_hoge.v)
 # POST : filename extension
-T=virtualtree
+T=virtualtree_random
 PRE=tb_
 POST=.v
 
