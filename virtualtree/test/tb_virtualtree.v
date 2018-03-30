@@ -6,8 +6,8 @@
   
 `include "virtualtree.v"
 
-`define W_LOG      3
-// `define W_LOG      7
+// `define W_LOG      6
+`define W_LOG      7
 `define P_LOG      3
 `define Q_SIZE     2
 `define FIFO_SIZE  2
@@ -85,7 +85,7 @@ module tb_SORTER_STAGE_TREE();
       else $write("               ");
       $write("||");
       $write("state: %d ", sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.state);
-      $write("| %b %b %b %b ", sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.QUEUE_IN_FULL, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_emp, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.ram_layer_emp0, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.ram_layer_emp1);
+      $write("| %b %b %b %b, %d %d, %b %b ", sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.QUEUE_IN_FULL, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_emp, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.ram_layer_emp0, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.ram_layer_emp1, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_dot_buf, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_dot, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.same_request_buf, sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.same_request);
       $write("| %d ", sorter_stage_tree.stage[`W_LOG-1].body.sorter_stage_body.queue_cnt);
       if (sorter_stage_tree.stage[`W_LOG-1].o_request_valid) $write(" %4d ", sorter_stage_tree.stage[`W_LOG-1].o_request);
       else $write("      ");
@@ -93,7 +93,7 @@ module tb_SORTER_STAGE_TREE();
       else $write("              ");
       $write("||");
       $write("state: %d ", sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.state);
-      $write("| %b %b %b %b ", sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.QUEUE_IN_FULL, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_emp, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.ram_layer_emp0, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.ram_layer_emp1);
+      $write("| %b %b %b %b, %d %d, %b %b ", sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.QUEUE_IN_FULL, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_emp, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.ram_layer_emp0, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.ram_layer_emp1, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_dot_buf, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_dot, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.same_request_buf, sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.same_request);
       $write("| %d ", sorter_stage_tree.stage[`W_LOG-2].body.sorter_stage_body.queue_cnt);
       if (sorter_stage_tree.stage[`W_LOG-2].o_request_valid) $write(" %3d ", sorter_stage_tree.stage[`W_LOG-2].o_request);
       else $write("     ");
