@@ -672,140 +672,231 @@ module TREE_FILLER #(parameter                       W_LOG     = 2,
   
   localparam NUM_RECORD = (1<<P_LOG);
 
-  wire                     queue_enq;
-  wire                     queue_deq;
-  wire [W_LOG-1:0]         queue_din;
-  wire [W_LOG-1:0]         queue_dot;
-  wire                     queue_emp;
-  wire                     queue_ful; 
-  // wire [1:0]               queue_cnt; 
-  wire [Q_SIZE:0]          queue_cnt; 
+  wire                  queue_enq;
+  wire                  queue_deq;
+  wire [W_LOG-1:0]      queue_din;
+  wire [W_LOG-1:0]      queue_dot;
+  wire                  queue_emp;
+  wire                  queue_ful; 
+  wire [Q_SIZE:0]       queue_cnt;
 
-  wire                     mfifo_enq;
-  wire [W_LOG-1:0]         mfifo_enq_idx;
-  wire                     mfifo_deq;
-  wire [W_LOG-1:0]         mfifo_deq_idx;
-  wire [(DATW<<P_LOG)-1:0] mfifo_din;
-  wire [(DATW<<P_LOG)-1:0] mfifo_dot;
-  wire [(1<<W_LOG)-1:0]    mfifo_emp;
-  wire [(1<<W_LOG)-1:0]    mfifo_ful;
+  reg  [W_LOG-1:0]      queue_dot_buf;
 
-  reg  [(DATW<<P_LOG)-1:0] shifted_data;
+  wire                  bram_we;
+  wire [W_LOG-1:0]      bram_raddr;
+  wire [W_LOG-1:0]      bram_waddr;
+  wire [DATW-1:0]       bram_din [NUM_RECORD-1:0];
+  wire [DATW-1:0]       bram_dot [NUM_RECORD-1:0];
 
-  reg  [P_LOG-1:0]         read_cnt [(1<<W_LOG)-1:0];
-  reg  [W_LOG-1:0]         read_raddr;
-  reg  [2:0]               read_state;
-  reg                      state_one;
-  reg                      data_ready;
-  reg                      requeue_deq;
-  reg  [(1<<W_LOG)-1:0]    almost_be_emp;
-  reg                      init_done;
-  reg [W_LOG-1:0]          init_deq_idx;
+  reg  [P_LOG-1:0]      head_list [(1<<W_LOG)-1:0];
+  wire [(1<<W_LOG)-1:0] emp_list;
+  
+  reg                   data_ready;
 
-  assign queue_enq     = I_REQUEST_VALID && init_done;
-  assign queue_deq     = state_one || &{requeue_deq,~queue_emp,(read_raddr == mfifo_deq_idx)};
-  assign queue_din     = I_REQUEST;
+  assign queue_enq  = I_REQUEST_VALID;
+  assign queue_deq  = ~|{queue_emp, emp_list[queue_dot]};
+  assign queue_din  = I_REQUEST;
 
-  assign mfifo_enq     = DINEN;
-  assign mfifo_enq_idx = DIN_IDX;
-  assign mfifo_deq     = &{queue_deq,almost_be_emp[mfifo_deq_idx]};
-  assign mfifo_deq_idx = (init_done) ? queue_dot : init_deq_idx;
-  assign mfifo_din     = DIN;
-
-  // TWO_ENTRY_FIFO #(W_LOG)
+  assign bram_we    = DINEN;
+  assign bram_raddr = queue_dot;
+  assign bram_waddr = DIN_IDX;
+  
   DFIFO #(Q_SIZE, W_LOG)
   request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
                 queue_dot, queue_emp, queue_ful, queue_cnt);
-
-  _MULTI_CHANNEL_FIFO #(W_LOG, (DATW<<P_LOG))
-  _multi_channel_fifo(CLK, RST, mfifo_enq, mfifo_enq_idx, mfifo_deq, mfifo_deq_idx, mfifo_din, 
-                      mfifo_dot, mfifo_emp, mfifo_ful);
-
-  always @(posedge CLK) begin
-    shifted_data <= mfifo_dot >> (DATW * read_cnt[mfifo_deq_idx]);
-  end
-
-  integer p;  
-  always @(posedge CLK) begin
-    if (RST) begin
-      for (p=0; p<(1<<W_LOG); p=p+1) read_cnt[p] <= 0;
-      read_raddr    <= 0;
-      read_state    <= 0;
-      state_one     <= 0;
-      data_ready    <= 0;
-      requeue_deq   <= 0;
-      almost_be_emp <= 0;
-      ////// for init (begin)
-      init_done     <= 0;
-      init_deq_idx  <= 0;
-      ////// for init (end)
-    end else begin
-      case (read_state)
-        ////// for init (begin)
-        0: begin
-          if (!init_done) begin if (!emp[mfifo_deq_idx]) read_state <= 1; end
-          else            begin                          read_state <= 3; end
-        end
-        1: begin  // mfifo_dot has been set
-          read_raddr              <= mfifo_deq_idx;
-          read_state              <= 2;
-          read_cnt[mfifo_deq_idx] <= read_cnt[mfifo_deq_idx] + 1;
-          data_ready              <= 1;
-        end
-        2: begin  // shifted_data has been set
-          if (read_cnt[mfifo_deq_idx] == (1<<FIFO_SIZE)) begin
-            read_state   <= 0;
-            data_ready   <= 0;
-            init_deq_idx <= init_deq_idx + 1;
-            if (init_deq_idx == (1<<W_LOG)-1) begin
-              init_done <= 1;
-            end
-          end else begin
-            read_cnt[mfifo_deq_idx] <= read_cnt[mfifo_deq_idx] + 1;
-          end
-        end
-        ////// for init (end)
-        3: begin
-          data_ready <= 0;
-          if (~|{queue_emp,emp[mfifo_deq_idx]}) begin
-            read_state <= 4;
-            state_one  <= 1;
-          end
-        end
-        4: begin  // mfifo_dot has been set
-          read_raddr                <= mfifo_deq_idx;
-          read_state                <= (almost_be_emp[mfifo_deq_idx]) ? 3 : 5;
-          state_one                 <= 0;
-          read_cnt[mfifo_deq_idx]   <= read_cnt[mfifo_deq_idx] + 1;
-          data_ready                <= 1;
-          requeue_deq               <= 1;
-          almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
-        end
-        5: begin  // shifted_data has been set
-          if (!queue_emp && (read_raddr == mfifo_deq_idx)) begin
-            read_cnt[mfifo_deq_idx]      <= read_cnt[mfifo_deq_idx] + 1;
-            almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
-            if (almost_be_emp[mfifo_deq_idx]) begin
-              read_state  <= 3;
-              requeue_deq <= 0;
-            end
-          end else begin
-            read_state  <= 3;
-            data_ready  <= 0;
-            requeue_deq <= 0;
-          end
-        end
-      endcase
+  
+  genvar i;
+  generate
+    for (i=0; i<NUM_RECORD; i=i+1) begin: entries
+      assign bram_din[i] = DIN[DATW*(i+1)-1:DATW*i];
+      BRAM #(W_LOG, DATW)
+      bram(CLK, bram_we, bram_raddr, bram_waddr, bram_din[i], bram_dot[i]);
     end
-  end
-
+    for (i=0; i<(1<<W_LOG); i=i+1) begin: logical_fifo
+      reg [P_LOG:0] head;  // P_LOG-1 -> P_LOG (to generate emp)
+      always @(posedge CLK) begin
+        if (RST) begin
+          head <= NUM_RECORD;
+        end else begin
+          case ({&{bram_we,(bram_waddr == i)}, &{queue_deq,(bram_raddr == i)}})
+            2'b01: head <= head + 1;
+            2'b10: head <= 0;
+          endcase
+        end
+      end
+      always @(posedge CLK) begin
+        head_list[i] <= head[P_LOG-1:0];
+      end
+      assign emp_list[i] = head[P_LOG];
+    end
+  endgenerate
+  
+  always @(posedge CLK) queue_dot_buf <= queue_dot;
+  always @(posedge CLK) data_ready    <= (RST) ? 0 : queue_deq;
+    
+  // Output
   assign QUEUE_FULL = queue_ful;
-  assign DOT        = shifted_data[DATW-1:0];
+  assign DOT        = bram_dot[head_list[queue_dot_buf]];
   assign DOTEN      = data_ready;
-  assign DOT_IDX    = read_raddr;
-  assign emp        = mfifo_emp;
+  assign DOT_IDX    = queue_dot_buf;
+  assign emp        = emp_list;
+  
+endmodule
+  
+// module TREE_FILLER #(parameter                       W_LOG     = 2,
+//                      parameter                       P_LOG     = 3,  // sorting network size in log scale
+//                      parameter                       Q_SIZE    = 2,
+//                      parameter                       FIFO_SIZE = 2,
+//                      parameter                       DATW      = 64)
+//                     (input  wire                     CLK,
+//                      input  wire                     RST,
+//                      input  wire [W_LOG-1:0]         I_REQUEST,
+//                      input  wire                     I_REQUEST_VALID,
+//                      input  wire [(DATW<<P_LOG)-1:0] DIN,
+//                      input  wire                     DINEN,
+//                      input  wire [W_LOG-1:0]         DIN_IDX,
+//                      output wire                     QUEUE_FULL,
+//                      output wire [DATW-1:0]          DOT,
+//                      output wire                     DOTEN,
+//                      output wire [W_LOG-1:0]         DOT_IDX,
+//                      output wire [(1<<W_LOG)-1:0]    emp);
+  
+//   localparam NUM_RECORD = (1<<P_LOG);
 
-endmodule  
+//   wire                     queue_enq;
+//   wire                     queue_deq;
+//   wire [W_LOG-1:0]         queue_din;
+//   wire [W_LOG-1:0]         queue_dot;
+//   wire                     queue_emp;
+//   wire                     queue_ful; 
+//   // wire [1:0]               queue_cnt; 
+//   wire [Q_SIZE:0]          queue_cnt; 
+
+//   wire                     mfifo_enq;
+//   wire [W_LOG-1:0]         mfifo_enq_idx;
+//   wire                     mfifo_deq;
+//   wire [W_LOG-1:0]         mfifo_deq_idx;
+//   wire [(DATW<<P_LOG)-1:0] mfifo_din;
+//   wire [(DATW<<P_LOG)-1:0] mfifo_dot;
+//   wire [(1<<W_LOG)-1:0]    mfifo_emp;
+//   wire [(1<<W_LOG)-1:0]    mfifo_ful;
+
+//   reg  [(DATW<<P_LOG)-1:0] shifted_data;
+
+//   reg  [P_LOG-1:0]         read_cnt [(1<<W_LOG)-1:0];
+//   reg  [W_LOG-1:0]         read_raddr;
+//   reg  [2:0]               read_state;
+//   reg                      state_one;
+//   reg                      data_ready;
+//   reg                      requeue_deq;
+//   reg  [(1<<W_LOG)-1:0]    almost_be_emp;
+//   reg                      init_done;
+//   reg [W_LOG-1:0]          init_deq_idx;
+
+//   assign queue_enq     = I_REQUEST_VALID && init_done;
+//   assign queue_deq     = state_one || &{requeue_deq,~queue_emp,(read_raddr == mfifo_deq_idx)};
+//   assign queue_din     = I_REQUEST;
+
+//   assign mfifo_enq     = DINEN;
+//   assign mfifo_enq_idx = DIN_IDX;
+//   assign mfifo_deq     = &{queue_deq,almost_be_emp[mfifo_deq_idx]};
+//   assign mfifo_deq_idx = (init_done) ? queue_dot : init_deq_idx;
+//   assign mfifo_din     = DIN;
+
+//   // TWO_ENTRY_FIFO #(W_LOG)
+//   DFIFO #(Q_SIZE, W_LOG)
+//   request_queue(CLK, RST, queue_enq, queue_deq, queue_din, 
+//                 queue_dot, queue_emp, queue_ful, queue_cnt);
+
+//   _MULTI_CHANNEL_FIFO #(W_LOG, (DATW<<P_LOG))
+//   _multi_channel_fifo(CLK, RST, mfifo_enq, mfifo_enq_idx, mfifo_deq, mfifo_deq_idx, mfifo_din, 
+//                       mfifo_dot, mfifo_emp, mfifo_ful);
+
+//   always @(posedge CLK) begin
+//     shifted_data <= mfifo_dot >> (DATW * read_cnt[mfifo_deq_idx]);
+//   end
+
+//   integer p;  
+//   always @(posedge CLK) begin
+//     if (RST) begin
+//       for (p=0; p<(1<<W_LOG); p=p+1) read_cnt[p] <= 0;
+//       read_raddr    <= 0;
+//       read_state    <= 0;
+//       state_one     <= 0;
+//       data_ready    <= 0;
+//       requeue_deq   <= 0;
+//       almost_be_emp <= 0;
+//       ////// for init (begin)
+//       init_done     <= 0;
+//       init_deq_idx  <= 0;
+//       ////// for init (end)
+//     end else begin
+//       case (read_state)
+//         ////// for init (begin)
+//         0: begin
+//           if (!init_done) begin if (!emp[mfifo_deq_idx]) read_state <= 1; end
+//           else            begin                          read_state <= 3; end
+//         end
+//         1: begin  // mfifo_dot has been set
+//           read_raddr              <= mfifo_deq_idx;
+//           read_state              <= 2;
+//           read_cnt[mfifo_deq_idx] <= read_cnt[mfifo_deq_idx] + 1;
+//           data_ready              <= 1;
+//         end
+//         2: begin  // shifted_data has been set
+//           if (read_cnt[mfifo_deq_idx] == (1<<FIFO_SIZE)) begin
+//             read_state   <= 0;
+//             data_ready   <= 0;
+//             init_deq_idx <= init_deq_idx + 1;
+//             if (init_deq_idx == (1<<W_LOG)-1) begin
+//               init_done <= 1;
+//             end
+//           end else begin
+//             read_cnt[mfifo_deq_idx] <= read_cnt[mfifo_deq_idx] + 1;
+//           end
+//         end
+//         ////// for init (end)
+//         3: begin
+//           data_ready <= 0;
+//           if (~|{queue_emp,emp[mfifo_deq_idx]}) begin
+//             read_state <= 4;
+//             state_one  <= 1;
+//           end
+//         end
+//         4: begin  // mfifo_dot has been set
+//           read_raddr                <= mfifo_deq_idx;
+//           read_state                <= (almost_be_emp[mfifo_deq_idx]) ? 3 : 5;
+//           state_one                 <= 0;
+//           read_cnt[mfifo_deq_idx]   <= read_cnt[mfifo_deq_idx] + 1;
+//           data_ready                <= 1;
+//           requeue_deq               <= 1;
+//           almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
+//         end
+//         5: begin  // shifted_data has been set
+//           if (!queue_emp && (read_raddr == mfifo_deq_idx)) begin
+//             read_cnt[mfifo_deq_idx]      <= read_cnt[mfifo_deq_idx] + 1;
+//             almost_be_emp[mfifo_deq_idx] <= (read_cnt[mfifo_deq_idx] == NUM_RECORD-2);
+//             if (almost_be_emp[mfifo_deq_idx]) begin
+//               read_state  <= 3;
+//               requeue_deq <= 0;
+//             end
+//           end else begin
+//             read_state  <= 3;
+//             data_ready  <= 0;
+//             requeue_deq <= 0;
+//           end
+//         end
+//       endcase
+//     end
+//   end
+
+//   assign QUEUE_FULL = queue_ful;
+//   assign DOT        = shifted_data[DATW-1:0];
+//   assign DOTEN      = data_ready;
+//   assign DOT_IDX    = read_raddr;
+//   assign emp        = mfifo_emp;
+
+// endmodule  
 
 
 /***** A virtual merge sorter tree                                       *****/
