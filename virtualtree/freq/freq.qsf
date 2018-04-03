@@ -1,0 +1,15 @@
+set_global_assignment -name TOP_LEVEL_ENTITY freq
+set_location_assignment PIN_AU33 -to CLK
+
+set_global_assignment -name LAST_QUARTUS_VERSION "17.1.2 Pro Edition"
+set_global_assignment -name FAMILY "Arria 10"
+set_global_assignment -name DEVICE 10AX115S2F45I2SGES
+set_global_assignment -name BOARD "Arria 10 FPGA Development Kit"
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+set_global_assignment -name POWER_AUTO_COMPUTE_TJ ON
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+set_global_assignment -name VERILOG_FILE freq.v
+set_global_assignment -name VERILOG_FILE ../src/virtualtree.v
+set_global_assignment -name SDC_FILE freq.sdc
