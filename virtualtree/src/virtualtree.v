@@ -655,7 +655,6 @@ endmodule
 module TREE_FILLER #(parameter                       W_LOG     = 2,
                      parameter                       P_LOG     = 3,  // sorting network size in log scale
                      parameter                       Q_SIZE    = 2,
-                     parameter                       FIFO_SIZE = 2,
                      parameter                       DATW      = 64)
                     (input  wire                     CLK,
                      input  wire                     RST,
@@ -938,7 +937,8 @@ module vMERGE_SORTER_TREE #(parameter                       W_LOG     = 2,
 
   assign sorter_stage_tree_in_full = IN_FULL;
   
-  TREE_FILLER #(W_LOG, P_LOG, Q_SIZE, FIFO_SIZE, DATW)
+  TREE_FILLER #(W_LOG, P_LOG, Q_SIZE, DATW)
+  // TREE_FILLER #(W_LOG, P_LOG, Q_SIZE, FIFO_SIZE, DATW)
   tree_filler(CLK, RST, tree_filler_i_request, tree_filler_i_request_valid, tree_filler_din, tree_filler_dinen, tree_filler_din_idx, 
               tree_filler_queue_full, tree_filler_dot, tree_filler_doten, tree_filler_dot_idx, tree_filler_emp);
   
