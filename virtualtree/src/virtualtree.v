@@ -180,9 +180,10 @@ module MULTI_CHANNEL_FIFO #(parameter                    C_LOG      = 2,  // # o
   genvar i;
   generate
     for (i=0; i<(1<<C_LOG); i=i+1) begin: channels
+      wire [FIFO_SIZE:0] next_head = head_list[i] + 1;
       assign emp[i]      = (head_list[i] == tail_list[i]);
       assign full[i]     = (head_list[i] == {~tail_list[i][FIFO_SIZE], tail_list[i][FIFO_SIZE-1:0]});
-      assign one_elem[i] = (head_list[i] + 1 == tail_list[i]);
+      assign one_elem[i] = (next_head == tail_list[i]);
     end
   endgenerate
   
